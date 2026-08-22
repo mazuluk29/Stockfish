@@ -24,11 +24,39 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK and NDK
         run: |
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;36.0.0"
+          sdkmanager "ndk;27.2.12479018"
+
+      - name: Download Stockfish source
+        run: |
+          git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish-source
+
+      - name: Build Stockfish ARM64 for Android
+        run: |
+          export NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+
+          cd stockfish-source/src
+
+          make -j2 build ARCH=armv8 COMP=ndk
+
+          file stockfish
+          ls -lh stockfish
+
+      - name: Add Stockfish to Android app
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+
+          cp stockfish-source/src/stockfish \
+             app/src/main/jniLibs/arm64-v8a/libstockfish.so
+
+          chmod +x app/src/main/jniLibs/arm64-v8a/libstockfish.so
+
+          ls -lh app/src/main/jniLibs/arm64-v8a/
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -50,15 +78,6 @@ jobs:
           "(^e:|error:|exception|unresolved reference|compilation error|failed|failure|cannot find|could not|aapt:|aapt2|resource .* not found|manifest merger)" \
           build.log | head -n 120 || true
           echo "=================================================="
-
-      - name: Show Kotlin errors with context
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "================ KOTLIN CONTEXT ================="
-          grep -n -i -E \
-          "(\\.kt:|unresolved reference|compilation error|error:)" \
-          build.log | head -n 80 || true
-          echo "================================================="
 
       - name: Fail job if build failed
         if: steps.build.outcome == 'failure'
