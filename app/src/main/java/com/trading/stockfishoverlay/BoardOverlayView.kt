@@ -5,11 +5,80 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.view.View
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.sin
+
+enum class MoveQuality(
+    val label: String,
+    val symbol: String,
+    val arrowColor: Int
+) {
+
+    BRILLIANT(
+        "Brilliant",
+        "!!",
+        Color.rgb(27, 172, 166)
+    ),
+
+    BEST(
+        "Best",
+        "★",
+        Color.rgb(79, 121, 66)
+    ),
+
+    EXCELLENT(
+        "Excellent",
+        "✓",
+        Color.rgb(96, 143, 78)
+    ),
+
+    GOOD(
+        "Good",
+        "✓",
+        Color.rgb(126, 150, 99)
+    ),
+
+    BOOK(
+        "Book",
+        "▣",
+        Color.rgb(166, 126, 91)
+    ),
+
+    INACCURACY(
+        "Inaccuracy",
+        "?!",
+        Color.rgb(241, 196, 78)
+    ),
+
+    MISTAKE(
+        "Mistake",
+        "?",
+        Color.rgb(230, 151, 55)
+    ),
+
+    MISS(
+        "Miss",
+        "✕",
+        Color.rgb(201, 111, 154)
+    ),
+
+    BLUNDER(
+        "Blunder",
+        "??",
+        Color.rgb(202, 71, 71)
+    )
+}
+
+data class OverlayMove(
+    val rank: Int,
+    val move: String,
+    val evaluation: String,
+    val quality: MoveQuality
+)
 
 class BoardOverlayView(
     context: Context
@@ -21,15 +90,16 @@ class BoardOverlayView(
     private var evaluation =
         0.0
 
-    private var moves =
-        emptyList<String>()
+    private var moves:
+        List<OverlayMove> =
+        emptyList()
 
     var whiteAtBottom =
         true
 
     fun update(
         evaluation: Double?,
-        moves: List<String>
+        moves: List<OverlayMove>
     ) {
 
         if (evaluation != null) {
@@ -42,7 +112,7 @@ class BoardOverlayView(
         }
 
         this.moves =
-            moves.take(3)
+            moves.take(5)
 
         invalidate()
     }
@@ -53,23 +123,22 @@ class BoardOverlayView(
 
         super.onDraw(canvas)
 
-        drawEvalBar(
+        drawEvaluationBar(
             canvas
         )
 
-        moves.forEachIndexed {
-                index,
-                move ->
+        moves
+            .asReversed()
+            .forEach {
 
-            drawArrow(
-                canvas,
-                move,
-                index
-            )
-        }
+                drawArrow(
+                    canvas,
+                    it
+                )
+            }
     }
 
-    private fun drawEvalBar(
+    private fun drawEvaluationBar(
         canvas: Canvas
     ) {
 
@@ -131,9 +200,11 @@ class BoardOverlayView(
 
     private fun drawArrow(
         canvas: Canvas,
-        move: String,
-        index: Int
+        item: OverlayMove
     ) {
+
+        val move =
+            item.move
 
         if (move.length < 4) {
             return
@@ -164,6 +235,27 @@ class BoardOverlayView(
         val cell =
             width / 8f
 
+        val alpha =
+            when (item.rank) {
+
+                1 -> 225
+                2 -> 195
+                3 -> 170
+                4 -> 145
+                else -> 125
+            }
+
+        val baseColor =
+            item.quality.arrowColor
+
+        val color =
+            Color.argb(
+                alpha,
+                Color.red(baseColor),
+                Color.green(baseColor),
+                Color.blue(baseColor)
+            )
+
         paint.style =
             Paint.Style.STROKE
 
@@ -171,45 +263,26 @@ class BoardOverlayView(
             Paint.Cap.ROUND
 
         paint.strokeWidth =
-            when (index) {
-
-                0 ->
-                    cell * 0.14f
+            when (item.rank) {
 
                 1 ->
-                    cell * 0.10f
+                    cell * 0.135f
+
+                2 ->
+                    cell * 0.115f
+
+                3 ->
+                    cell * 0.095f
+
+                4 ->
+                    cell * 0.080f
 
                 else ->
-                    cell * 0.075f
+                    cell * 0.070f
             }
 
         paint.color =
-            when (index) {
-
-                0 ->
-                    Color.argb(
-                        210,
-                        70,
-                        190,
-                        90
-                    )
-
-                1 ->
-                    Color.argb(
-                        175,
-                        240,
-                        180,
-                        50
-                    )
-
-                else ->
-                    Color.argb(
-                        150,
-                        70,
-                        150,
-                        235
-                    )
-            }
+            color
 
         canvas.drawLine(
             start.first,
@@ -225,9 +298,126 @@ class BoardOverlayView(
             start.second,
             end.first,
             end.second,
-            paint.color,
+            color,
             cell
         )
+
+        drawBadge(
+            canvas,
+            end.first,
+            end.second,
+            item,
+            cell
+        )
+    }
+
+    private fun drawBadge(
+        canvas: Canvas,
+        x: Float,
+        y: Float,
+        item: OverlayMove,
+        cell: Float
+    ) {
+
+        val radius =
+            cell * 0.18f
+
+        val badgeX =
+            x + cell * 0.22f
+
+        val badgeY =
+            y - cell * 0.22f
+
+        paint.style =
+            Paint.Style.FILL
+
+        paint.color =
+            item.quality.arrowColor
+
+        canvas.drawCircle(
+            badgeX,
+            badgeY,
+            radius,
+            paint
+        )
+
+        paint.color =
+            Color.WHITE
+
+        paint.textAlign =
+            Paint.Align.CENTER
+
+        paint.textSize =
+            radius * 1.05f
+
+        paint.isFakeBoldText =
+            true
+
+        canvas.drawText(
+            item.quality.symbol,
+            badgeX,
+            badgeY +
+                paint.textSize * 0.35f,
+            paint
+        )
+
+        /*
+         * #1, #2, #3...
+         */
+        val rankWidth =
+            cell * 0.36f
+
+        val rankHeight =
+            cell * 0.22f
+
+        val left =
+            badgeX -
+                rankWidth / 2f
+
+        val top =
+            badgeY +
+                radius +
+                cell * 0.04f
+
+        val rect =
+            RectF(
+                left,
+                top,
+                left + rankWidth,
+                top + rankHeight
+            )
+
+        paint.color =
+            Color.argb(
+                220,
+                25,
+                25,
+                25
+            )
+
+        canvas.drawRoundRect(
+            rect,
+            cell * 0.04f,
+            cell * 0.04f,
+            paint
+        )
+
+        paint.color =
+            Color.WHITE
+
+        paint.textSize =
+            cell * 0.14f
+
+        canvas.drawText(
+            "#${item.rank}",
+            rect.centerX(),
+            rect.centerY() +
+                paint.textSize * 0.34f,
+            paint
+        )
+
+        paint.isFakeBoldText =
+            false
     }
 
     private fun drawArrowHead(
@@ -247,7 +437,7 @@ class BoardOverlayView(
             )
 
         val length =
-            cell * 0.30f
+            cell * 0.28f
 
         val spread =
             0.55f
@@ -329,7 +519,9 @@ class BoardOverlayView(
         val row: Int
         val col: Int
 
-        if (whiteAtBottom) {
+        if (
+            whiteAtBottom
+        ) {
 
             col =
                 file
