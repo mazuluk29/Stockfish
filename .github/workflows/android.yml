@@ -60,10 +60,29 @@ jobs:
 
       - name: Build debug APK
         run: |
+          set +e
+          set -o pipefail
+
           gradle \
             --no-daemon \
             --console=plain \
-            :app:assembleDebug
+            :app:assembleDebug \
+            2>&1 | tee build.log
+
+          STATUS=${PIPESTATUS[0]}
+
+          echo ""
+          echo "================================================"
+          echo "          KONKRETNE BLEDY KOMPILACJI"
+          echo "================================================"
+
+          grep -n -E \
+          "^e:|\.kt:[0-9]+|error:|Unresolved reference|Cannot infer|Type mismatch|No value passed|Too many arguments|Expecting|Overload resolution ambiguity" \
+          build.log | head -n 100 || true
+
+          echo "================================================"
+
+          exit $STATUS
 
       - name: Verify APK exists
         run: |
