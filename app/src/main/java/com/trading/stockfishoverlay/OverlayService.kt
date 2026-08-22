@@ -61,6 +61,8 @@ class OverlayService : Service() {
     private var lastFrameTime = 0L
     private var lastMoveTime = 0L
 
+    private var boardWasLocked = false
+
     private val analysing =
         AtomicBoolean(false)
 
@@ -207,8 +209,25 @@ class OverlayService : Service() {
         tracker.reset()
         position.reset()
 
+        boardWasLocked = false
+
         lastFrameTime = 0L
         lastMoveTime = 0L
+
+        mainHandler.post {
+
+            analysisText?.text =
+                "Czekam na planszę..."
+
+            boardOverlay?.let {
+
+                runCatching {
+                    windowManager.removeView(it)
+                }
+            }
+
+            boardOverlay = null
+        }
 
         status(
             "LIVE • uruchamianie"
@@ -294,7 +313,7 @@ class OverlayService : Service() {
         }
 
         status(
-            "LIVE • ekran OK"
+            "LIVE • szukam planszy..."
         )
 
         reader.setOnImageAvailableListener(
@@ -370,26 +389,24 @@ class OverlayService : Service() {
                             screen
                         )
 
-                    } catch (e: Throwable) {
+                    } catch (error: Throwable) {
 
                         status(
                             "LIVE • FRAME ERROR: " +
                                 (
-                                    e.message
-                                        ?: e.javaClass.simpleName
+                                    error.message
+                                        ?: error.javaClass.simpleName
                                 )
                         )
-
-                        screen.recycle()
                     }
 
-                } catch (e: Throwable) {
+                } catch (error: Throwable) {
 
                     status(
                         "LIVE • CAPTURE ERROR: " +
                             (
-                                e.message
-                                    ?: e.javaClass.simpleName
+                                error.message
+                                    ?: error.javaClass.simpleName
                             )
                     )
 
@@ -400,8 +417,6 @@ class OverlayService : Service() {
             },
             captureHandler
         )
-
-        analysePosition()
     }
 
     private fun processFrame(
@@ -418,16 +433,81 @@ class OverlayService : Service() {
             val area =
                 tracker.boardArea()
 
-            if (area != null) {
+            /*
+             * BRAK PRAWDZIWEJ PLANSZY.
+             */
+            if (
+                area == null ||
+                !tracker.isLocked
+            ) {
+
+                if (boardWasLocked) {
+
+                    boardWasLocked =
+                        false
+
+                    position.reset()
+
+                    analysing.set(false)
+
+                    mainHandler.post {
+
+                        analysisText?.text =
+                            "Czekam na planszę..."
+
+                        boardOverlay?.let {
+
+                            runCatching {
+                                windowManager
+                                    .removeView(it)
+                            }
+                        }
+
+                        boardOverlay =
+                            null
+                    }
+                }
+
+                status(
+                    "LIVE • szukam planszy..."
+                )
+
+                return
+            }
+
+            /*
+             * WŁAŚNIE WYKRYTO STABILNĄ PLANSZĘ.
+             */
+            if (!boardWasLocked) {
+
+                boardWasLocked =
+                    true
+
+                position.reset()
+
+                lastMoveTime =
+                    System.currentTimeMillis()
+
+                status(
+                    "LIVE • plansza zablokowana"
+                )
 
                 showBoardOverlayOnMain(
                     area
                 )
 
-                status(
-                    "LIVE • plansza OK"
-                )
+                analysePosition()
+
+                return
             }
+
+            showBoardOverlayOnMain(
+                area
+            )
+
+            status(
+                "LIVE • plansza OK"
+            )
 
             if (
                 changed == null ||
@@ -449,8 +529,7 @@ class OverlayService : Service() {
             val move =
                 inferMove(
                     changed
-                )
-                    ?: return
+                ) ?: return
 
             if (
                 position.applyMove(
@@ -537,6 +616,7 @@ class OverlayService : Service() {
                         destination.square[1] == '8'
                     )
                 ) {
+
                     move += "q"
                 }
 
@@ -558,6 +638,10 @@ class OverlayService : Service() {
 
     private fun analysePosition() {
 
+        if (!boardWasLocked) {
+            return
+        }
+
         if (
             analysing.getAndSet(true)
         ) {
@@ -574,7 +658,15 @@ class OverlayService : Service() {
 
             analysing.set(false)
 
+            if (!boardWasLocked) {
+                return@analyzeFen
+            }
+
             mainHandler.post {
+
+                if (!boardWasLocked) {
+                    return@post
+                }
 
                 if (
                     result.error != null
@@ -637,6 +729,10 @@ class OverlayService : Service() {
 
         mainHandler.post {
 
+            if (!boardWasLocked) {
+                return@post
+            }
+
             try {
 
                 val existing =
@@ -693,8 +789,7 @@ class OverlayService : Service() {
 
                     val params =
                         existing.layoutParams
-                            as? WindowManager
-                                .LayoutParams
+                            as? WindowManager.LayoutParams
                             ?: return@post
 
                     params.x =
@@ -716,13 +811,13 @@ class OverlayService : Service() {
                         )
                 }
 
-            } catch (e: Throwable) {
+            } catch (error: Throwable) {
 
                 status(
                     "LIVE • OVERLAY ERROR: " +
                         (
-                            e.message
-                                ?: e.javaClass.simpleName
+                            error.message
+                                ?: error.javaClass.simpleName
                         )
                 )
             }
@@ -770,13 +865,7 @@ class OverlayService : Service() {
                 .apply {
 
                     text =
-                        if (
-                            engine.isAvailable()
-                        ) {
-                            "Stockfish gotowy"
-                        } else {
-                            "Brak Stockfisha"
-                        }
+                        "Czekam na planszę..."
 
                     textSize =
                         13f
@@ -839,6 +928,7 @@ class OverlayService : Service() {
     ) {
 
         mainHandler.post {
+
             statusText?.text =
                 text
         }
@@ -922,6 +1012,9 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
 
+        boardWasLocked =
+            false
+
         releaseCapture(true)
 
         runCatching {
@@ -931,6 +1024,7 @@ class OverlayService : Service() {
         mainHandler.post {
 
             infoOverlay?.let {
+
                 runCatching {
                     windowManager
                         .removeView(it)
@@ -938,14 +1032,18 @@ class OverlayService : Service() {
             }
 
             boardOverlay?.let {
+
                 runCatching {
                     windowManager
                         .removeView(it)
                 }
             }
 
-            infoOverlay = null
-            boardOverlay = null
+            infoOverlay =
+                null
+
+            boardOverlay =
+                null
         }
 
         captureThread
@@ -963,6 +1061,7 @@ class OverlayService : Service() {
     override fun onBind(
         intent: Intent?
     ): IBinder? {
+
         return null
     }
 }
