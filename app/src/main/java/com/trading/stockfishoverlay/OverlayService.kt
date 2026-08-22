@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -24,7 +23,6 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
-import java.util.concurrent.atomic.AtomicBoolean
 
 class OverlayService : Service() {
 
@@ -32,73 +30,55 @@ class OverlayService : Service() {
         const val ACTION_START_LIVE = "START_LIVE"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
-
-        private const val CAPTURE_INTERVAL = 700L
     }
 
     private lateinit var windowManager: WindowManager
     private lateinit var engine: StockfishEngine
 
-    private val tracker = BoardTracker()
-    private val position = ChessPosition()
-
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
 
-    private var panel: LinearLayout? = null
-    private var statusText: TextView? = null
-    private var movesText: TextView? = null
-    private var evalBar: EvalBarView? = null
-
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
 
-    private var lastCapturedFrame = 0L
-    private var lastMoveTime = 0L
+    private var overlay: LinearLayout? = null
+    private var statusText: TextView? = null
+    private var engineText: TextView? = null
 
-    private val analysing = AtomicBoolean(false)
+    private var frameCounter = 0L
+    private var lastUiUpdate = 0L
 
     private val projectionCallback =
         object : MediaProjection.Callback() {
 
             override fun onStop() {
-                super.onStop()
-
                 statusText?.post {
                     statusText?.text =
                         "LIVE • przechwytywanie zatrzymane"
                 }
 
-                releaseCaptureResources(
-                    stopProjection = false
-                )
+                releaseCapture(false)
             }
         }
 
     override fun onCreate() {
         super.onCreate()
 
+        windowManager =
+            getSystemService(WINDOW_SERVICE) as WindowManager
+
         engine = StockfishEngine(this)
 
-        windowManager =
-            getSystemService(
-                WINDOW_SERVICE
-            ) as WindowManager
-
         captureThread =
-            HandlerThread(
-                "StockfishCapture"
-            ).apply {
+            HandlerThread("ScreenCaptureThread").apply {
                 start()
             }
 
         captureHandler =
-            Handler(
-                captureThread!!.looper
-            )
+            Handler(captureThread!!.looper)
 
-        createChannel()
+        createNotificationChannel()
         createOverlay()
     }
 
@@ -108,12 +88,12 @@ class OverlayService : Service() {
         startId: Int
     ): Int {
 
-        startForegroundNow()
+        startForegroundNotification()
 
         if (intent?.action == ACTION_START_LIVE) {
 
             statusText?.text =
-                "LIVE • zgoda odebrana"
+                "LIVE • otrzymano zgodę"
 
             val resultCode =
                 intent.getIntExtra(
@@ -121,7 +101,7 @@ class OverlayService : Service() {
                     Activity.RESULT_CANCELED
                 )
 
-            val data: Intent? =
+            val resultData: Intent? =
                 if (Build.VERSION.SDK_INT >= 33) {
 
                     intent.getParcelableExtra(
@@ -139,25 +119,25 @@ class OverlayService : Service() {
 
             if (
                 resultCode == Activity.RESULT_OK &&
-                data != null
+                resultData != null
             ) {
 
-                startProjection(
+                startScreenCapture(
                     resultCode,
-                    data
+                    resultData
                 )
 
             } else {
 
                 statusText?.text =
-                    "LIVE • brak zgody na ekran"
+                    "LIVE • brak zgody"
             }
         }
 
         return START_NOT_STICKY
     }
 
-    private fun startForegroundNow() {
+    private fun startForegroundNotification() {
 
         val pendingIntent =
             PendingIntent.getActivity(
@@ -173,71 +153,66 @@ class OverlayService : Service() {
         val notification =
             NotificationCompat.Builder(
                 this,
-                "live"
+                "stockfish_live"
             )
                 .setSmallIcon(
                     android.R.drawable.ic_menu_search
                 )
                 .setContentTitle(
-                    "Stockfish LIVE"
+                    "Stockfish Overlay"
                 )
                 .setContentText(
-                    "Analiza ekranu aktywna"
+                    "Przechwytywanie ekranu"
                 )
                 .setOngoing(true)
-                .setContentIntent(
-                    pendingIntent
-                )
+                .setContentIntent(pendingIntent)
                 .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
 
             startForeground(
-                77,
+                100,
                 notification,
-                ServiceInfo
-                    .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
 
         } else {
 
             startForeground(
-                77,
+                100,
                 notification
             )
         }
     }
 
-    private fun startProjection(
+    private fun startScreenCapture(
         resultCode: Int,
-        data: Intent
+        resultData: Intent
     ) {
 
-        releaseCaptureResources(
-            stopProjection = true
-        )
+        releaseCapture(true)
 
         statusText?.post {
             statusText?.text =
                 "LIVE • tworzę MediaProjection"
         }
 
-        val manager =
+        val projectionManager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
         val projection =
-            manager.getMediaProjection(
+            projectionManager.getMediaProjection(
                 resultCode,
-                data
+                resultData
             )
 
         if (projection == null) {
 
             statusText?.post {
                 statusText?.text =
-                    "LIVE • błąd MediaProjection"
+                    "LIVE • MediaProjection = null"
             }
 
             return
@@ -259,8 +234,7 @@ class OverlayService : Service() {
             DisplayMetrics()
 
         @Suppress("DEPRECATION")
-        windowManager
-            .defaultDisplay
+        windowManager.defaultDisplay
             .getRealMetrics(metrics)
 
         val width =
@@ -272,102 +246,8 @@ class OverlayService : Service() {
         val density =
             metrics.densityDpi
 
-        imageReader =
+        val reader =
             ImageReader.newInstance(
                 width,
                 height,
-                PixelFormat.RGBA_8888,
-                2
-            )
-
-        val reader =
-            imageReader
-
-        if (reader == null) {
-
-            statusText?.post {
-                statusText?.text =
-                    "LIVE • błąd ImageReader"
-            }
-
-            return
-        }
-
-        virtualDisplay =
-            projection.createVirtualDisplay(
-                "StockfishLive",
-                width,
-                height,
-                density,
-                DisplayManager
-                    .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null,
-                captureHandler
-            )
-
-        if (virtualDisplay == null) {
-
-            statusText?.post {
-                statusText?.text =
-                    "LIVE • błąd VirtualDisplay"
-            }
-
-            return
-        }
-
-        statusText?.post {
-            statusText?.text =
-                "LIVE • VirtualDisplay OK"
-        }
-
-        reader.setOnImageAvailableListener(
-            { imageReader ->
-
-                val image =
-                    imageReader.acquireLatestImage()
-                        ?: return@setOnImageAvailableListener
-
-                val now =
-                    System.currentTimeMillis()
-
-                if (
-                    now - lastCapturedFrame <
-                    CAPTURE_INTERVAL
-                ) {
-
-                    image.close()
-                    return@setOnImageAvailableListener
-                }
-
-                lastCapturedFrame = now
-
-                try {
-
-                    val plane =
-                        image.planes[0]
-
-                    val buffer =
-                        plane.buffer
-
-                    val pixelStride =
-                        plane.pixelStride
-
-                    val rowStride =
-                        plane.rowStride
-
-                    val rowPadding =
-                        rowStride -
-                            pixelStride * width
-
-                    val bitmapWidth =
-                        width +
-                            rowPadding /
-                            pixelStride
-
-                    val fullBitmap =
-                        Bitmap.createBitmap(
-                            bitmapWidth,
-                            height,
-                            Bitmap.Config.ARGB_8888
-                        )
+                Pixel
