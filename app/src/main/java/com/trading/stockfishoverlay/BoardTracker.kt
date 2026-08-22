@@ -11,81 +11,282 @@ class BoardTracker {
         val size: Int
     )
 
-    private var previous:
-        Array<DoubleArray>? = null
-
-    private var boardArea:
-        BoardArea? = null
+    data class ChangedSquare(
+        val square: String,
+        val difference: Double
+    )
 
     var whiteAtBottom = true
 
+    private var area:
+        BoardArea? = null
+
+    private var previous:
+        Array<DoubleArray>? = null
+
     fun reset() {
+        area = null
         previous = null
-        boardArea = null
     }
 
-    fun getBoardArea(): BoardArea? =
-        boardArea
+    fun boardArea():
+        BoardArea? = area
 
     fun process(
         bitmap: Bitmap
-    ): List<String>? {
+    ): List<ChangedSquare>? {
 
-        if (boardArea == null) {
-            boardArea = detectBoard(bitmap)
+        if (area == null) {
+
+            area =
+                detectBoard(bitmap)
+
+            previous = null
         }
 
-        val area =
-            boardArea ?: return null
+        val board =
+            area
+                ?: return null
 
         val current =
-            signatures(
+            createSignatures(
                 bitmap,
-                area
+                board
             )
 
         val old =
             previous
 
-        previous = current
+        previous =
+            current
 
-        if (old == null)
+        if (old == null) {
             return emptyList()
+        }
 
         val changed =
-            mutableListOf<Pair<Int, Double>>()
+            mutableListOf<ChangedSquare>()
 
-        for (i in 0 until 64) {
+        for (index in 0 until 64) {
 
-            var d = 0.0
+            var difference = 0.0
 
-            for (k in 0..2) {
-                d += abs(
-                    current[i][k] -
-                    old[i][k]
-                )
+            for (channel in 0..2) {
+
+                difference +=
+                    abs(
+                        current[index][channel] -
+                        old[index][channel]
+                    )
             }
 
-            d /= 3.0
+            difference /= 3.0
 
-            if (d > 18.0) {
-                changed += i to d
+            if (difference > 11.0) {
+
+                changed +=
+                    ChangedSquare(
+                        indexToSquare(index),
+                        difference
+                    )
             }
         }
 
         return changed
-            .sortedByDescending { it.second }
-            .take(6)
-            .map {
-                screenIndexToSquare(
-                    it.first
-                )
+            .sortedByDescending {
+                it.difference
             }
+            .take(8)
     }
 
-    private fun signatures(
+    private fun detectBoard(
+        bitmap: Bitmap
+    ): BoardArea? {
+
+        val width =
+            bitmap.width
+
+        val height =
+            bitmap.height
+
+        var best:
+            BoardArea? = null
+
+        var bestScore =
+            -999999.0
+
+        val maxLeft =
+            minOf(
+                80,
+                width / 5
+            )
+
+        var left = 0
+
+        while (left <= maxLeft) {
+
+            val size =
+                width - left
+
+            if (size <= 0) {
+                left += 8
+                continue
+            }
+
+            var top =
+                maxOf(
+                    120,
+                    height / 6
+                )
+
+            val lastTop =
+                height - size - 120
+
+            while (top <= lastTop) {
+
+                val score =
+                    checkerScore(
+                        bitmap,
+                        left,
+                        top,
+                        size
+                    )
+
+                if (score > bestScore) {
+
+                    bestScore =
+                        score
+
+                    best =
+                        BoardArea(
+                            left,
+                            top,
+                            size
+                        )
+                }
+
+                top += 8
+            }
+
+            left += 8
+        }
+
+        return best
+    }
+
+    private fun checkerScore(
         bitmap: Bitmap,
-        area: BoardArea
+        left: Int,
+        top: Int,
+        size: Int
+    ): Double {
+
+        val cell =
+            size / 8f
+
+        val group0 =
+            DoubleArray(3)
+
+        val group1 =
+            DoubleArray(3)
+
+        var count0 = 0
+        var count1 = 0
+
+        for (row in 0..7) {
+
+            for (col in 0..7) {
+
+                /*
+                 * Próbka blisko rogu pola,
+                 * żeby rzadziej trafiać w figurę.
+                 */
+                val x =
+                    (
+                        left +
+                        col * cell +
+                        cell * 0.14f
+                    ).toInt()
+
+                val y =
+                    (
+                        top +
+                        row * cell +
+                        cell * 0.14f
+                    ).toInt()
+
+                if (
+                    x !in 0 until bitmap.width ||
+                    y !in 0 until bitmap.height
+                ) {
+                    continue
+                }
+
+                val pixel =
+                    bitmap.getPixel(x, y)
+
+                val values =
+                    doubleArrayOf(
+                        ((pixel shr 16) and 255)
+                            .toDouble(),
+
+                        ((pixel shr 8) and 255)
+                            .toDouble(),
+
+                        (pixel and 255)
+                            .toDouble()
+                    )
+
+                val first =
+                    (row + col) % 2 == 0
+
+                val target =
+                    if (first)
+                        group0
+                    else
+                        group1
+
+                for (i in 0..2) {
+                    target[i] += values[i]
+                }
+
+                if (first)
+                    count0++
+                else
+                    count1++
+            }
+        }
+
+        if (
+            count0 == 0 ||
+            count1 == 0
+        ) {
+            return -999999.0
+        }
+
+        for (i in 0..2) {
+
+            group0[i] /= count0
+            group1[i] /= count1
+        }
+
+        var difference = 0.0
+
+        for (i in 0..2) {
+
+            difference +=
+                abs(
+                    group0[i] -
+                    group1[i]
+                )
+        }
+
+        return difference
+    }
+
+    private fun createSignatures(
+        bitmap: Bitmap,
+        board: BoardArea
     ): Array<DoubleArray> {
 
         val result =
@@ -94,82 +295,103 @@ class BoardTracker {
             }
 
         val cell =
-            area.size / 8f
+            board.size / 8f
 
         for (row in 0..7) {
+
             for (col in 0..7) {
 
-                val idx =
+                val index =
                     row * 8 + col
 
-                var rs = 0L
-                var gs = 0L
-                var bs = 0L
+                var red = 0L
+                var green = 0L
+                var blue = 0L
                 var count = 0
 
-                val x0 =
-                    (area.left + col * cell + cell * 0.25f)
-                        .toInt()
+                /*
+                 * Środkowa część pola.
+                 */
+                val startX =
+                    (
+                        board.left +
+                        col * cell +
+                        cell * 0.18f
+                    ).toInt()
 
-                val x1 =
-                    (area.left + (col + 1) * cell - cell * 0.25f)
-                        .toInt()
+                val endX =
+                    (
+                        board.left +
+                        (col + 1) * cell -
+                        cell * 0.18f
+                    ).toInt()
 
-                val y0 =
-                    (area.top + row * cell + cell * 0.25f)
-                        .toInt()
+                val startY =
+                    (
+                        board.top +
+                        row * cell +
+                        cell * 0.18f
+                    ).toInt()
 
-                val y1 =
-                    (area.top + (row + 1) * cell - cell * 0.25f)
-                        .toInt()
+                val endY =
+                    (
+                        board.top +
+                        (row + 1) * cell -
+                        cell * 0.18f
+                    ).toInt()
 
-                var y = y0
+                var y =
+                    startY
 
-                while (y < y1) {
+                while (y < endY) {
 
-                    var x = x0
+                    var x =
+                        startX
 
-                    while (x < x1) {
+                    while (x < endX) {
 
                         if (
                             x in 0 until bitmap.width &&
                             y in 0 until bitmap.height
                         ) {
 
-                            val p =
+                            val pixel =
                                 bitmap.getPixel(
                                     x,
                                     y
                                 )
 
-                            rs +=
-                                (p shr 16) and 255
+                            red +=
+                                (pixel shr 16) and 255
 
-                            gs +=
-                                (p shr 8) and 255
+                            green +=
+                                (pixel shr 8) and 255
 
-                            bs +=
-                                p and 255
+                            blue +=
+                                pixel and 255
 
                             count++
                         }
 
-                        x += 4
+                        x += 5
                     }
 
-                    y += 4
+                    y += 5
                 }
 
                 if (count > 0) {
 
-                    result[idx][0] =
-                        rs.toDouble() / count
+                    result[index][0] =
+                        red.toDouble() /
+                            count
 
-                    result[idx][1] =
-                        gs.toDouble() / count
+                    result[index][1] =
+                        green.toDouble() /
+                            count
 
-                    result[idx][2] =
-                        bs.toDouble() / count
+                    result[index][2] =
+                        blue.toDouble() /
+                            count
                 }
             }
         }
@@ -177,155 +399,18 @@ class BoardTracker {
         return result
     }
 
-    private fun detectBoard(
-        bitmap: Bitmap
-    ): BoardArea? {
-
-        /*
-         * Pierwsza wersja:
-         * Chess.com na telefonie zwykle pokazuje
-         * planszę na całą szerokość ekranu.
-         *
-         * Szukamy najlepszego pionowego położenia.
-         */
-
-        val size =
-            bitmap.width
-
-        if (bitmap.height < size)
-            return null
-
-        var bestTop = 0
-        var bestScore =
-            Double.NEGATIVE_INFINITY
-
-        var top = 0
-
-        while (
-            top + size <= bitmap.height
-        ) {
-
-            val score =
-                checkerScore(
-                    bitmap,
-                    top,
-                    size
-                )
-
-            if (score > bestScore) {
-                bestScore = score
-                bestTop = top
-            }
-
-            top += 12
-        }
-
-        return BoardArea(
-            0,
-            bestTop,
-            size
-        )
-    }
-
-    private fun checkerScore(
-        bitmap: Bitmap,
-        top: Int,
-        size: Int
-    ): Double {
-
-        val cell =
-            size / 8f
-
-        val parity0 =
-            DoubleArray(3)
-
-        val parity1 =
-            DoubleArray(3)
-
-        var n0 = 0
-        var n1 = 0
-
-        for (r in 0..7) {
-            for (c in 0..7) {
-
-                val x =
-                    (c * cell + cell * 0.12f)
-                        .toInt()
-
-                val y =
-                    (
-                        top +
-                        r * cell +
-                        cell * 0.12f
-                    ).toInt()
-
-                if (
-                    x !in 0 until bitmap.width ||
-                    y !in 0 until bitmap.height
-                ) continue
-
-                val p =
-                    bitmap.getPixel(
-                        x,
-                        y
-                    )
-
-                val rgb =
-                    doubleArrayOf(
-                        ((p shr 16) and 255).toDouble(),
-                        ((p shr 8) and 255).toDouble(),
-                        (p and 255).toDouble()
-                    )
-
-                val target =
-                    if ((r + c) % 2 == 0)
-                        parity0
-                    else
-                        parity1
-
-                for (k in 0..2)
-                    target[k] += rgb[k]
-
-                if ((r + c) % 2 == 0)
-                    n0++
-                else
-                    n1++
-            }
-        }
-
-        if (n0 == 0 || n1 == 0)
-            return -9999.0
-
-        for (k in 0..2) {
-            parity0[k] /= n0
-            parity1[k] /= n1
-        }
-
-        var difference = 0.0
-
-        for (k in 0..2) {
-            difference +=
-                abs(
-                    parity0[k] -
-                    parity1[k]
-                )
-        }
-
-        return difference
-    }
-
-    private fun screenIndexToSquare(
+    private fun indexToSquare(
         index: Int
     ): String {
 
-        val row = index / 8
-        val col = index % 8
+        val row =
+            index / 8
 
-        val file:
-            Int
+        val col =
+            index % 8
 
-        val rank:
-            Int
+        val file: Int
+        val rank: Int
 
         if (whiteAtBottom) {
 
@@ -338,6 +423,13 @@ class BoardTracker {
             rank = row + 1
         }
 
-        return "${('a'.code + file).toChar()}$rank"
+        return buildString {
+            append(
+                ('a'.code + file)
+                    .toChar()
+            )
+
+            append(rank)
+        }
     }
 }
