@@ -19,52 +19,87 @@ class StockfishEngine(
     private val executor =
         Executors.newSingleThreadExecutor()
 
-    fun isAvailable(): Boolean =
-        engineFile().exists()
-
-    private fun engineFile(): File =
-        File(
+    private fun engineFile(): File {
+        return File(
             context.applicationInfo.nativeLibraryDir,
             "libstockfish.so"
         )
-
-    @Synchronized
-    private fun ensureStarted(): Boolean {
-
-        if (process?.isAlive == true)
-            return true
-
-        val file = engineFile()
-
-        if (!file.exists())
-            return false
-
-        process =
-            ProcessBuilder(file.absolutePath)
-                .redirectErrorStream(true)
-                .start()
-
-        writer =
-            BufferedWriter(
-                OutputStreamWriter(
-                    process!!.outputStream
-                )
-            )
-
-        reader =
-            BufferedReader(
-                InputStreamReader(
-                    process!!.inputStream
-                )
-            )
-
-        send("uci")
-        send("setoption name MultiPV value 10")
-
-        return true
     }
 
-    private fun send(command: String) {
+    fun isAvailable(): Boolean {
+        return engineFile().exists()
+    }
+
+    @Synchronized
+    private fun startEngine(): Boolean {
+
+        if (process?.isAlive == true) {
+            return true
+        }
+
+        val file =
+            engineFile()
+
+        if (!file.exists()) {
+            return false
+        }
+
+        return try {
+
+            process =
+                ProcessBuilder(
+                    file.absolutePath
+                )
+                    .redirectErrorStream(true)
+                    .start()
+
+            writer =
+                BufferedWriter(
+                    OutputStreamWriter(
+                        process!!.outputStream
+                    )
+                )
+
+            reader =
+                BufferedReader(
+                    InputStreamReader(
+                        process!!.inputStream
+                    )
+                )
+
+            send("uci")
+
+            waitFor(
+                "uciok",
+                5000
+            )
+
+            send(
+                "setoption name MultiPV value 5"
+            )
+
+            send("isready")
+
+            waitFor(
+                "readyok",
+                5000
+            )
+
+            true
+
+        } catch (_: Exception) {
+
+            process = null
+            writer = null
+            reader = null
+
+            false
+        }
+    }
+
+    private fun send(
+        command: String
+    ) {
 
         writer?.apply {
 
@@ -72,6 +107,45 @@ class StockfishEngine(
             newLine()
             flush()
         }
+    }
+
+    private fun waitFor(
+        wanted: String,
+        timeout: Long
+    ): Boolean {
+
+        val input =
+            reader ?: return false
+
+        val start =
+            System.currentTimeMillis()
+
+        while (
+            System.currentTimeMillis() -
+            start <
+            timeout
+        ) {
+
+            if (!input.ready()) {
+
+                Thread.sleep(5)
+                continue
+            }
+
+            val line =
+                input.readLine()
+                    ?: return false
+
+            if (
+                line.contains(
+                    wanted
+                )
+            ) {
+                return true
+            }
+        }
+
+        return false
     }
 
     fun analyzeFen(
@@ -82,105 +156,283 @@ class StockfishEngine(
 
         executor.execute {
 
-            if (!ensureStarted()) {
+            if (!startEngine()) {
 
                 callback(
                     EngineResult(
                         error =
-                        "Brak libstockfish.so dla arm64-v8a"
+                            "Nie udało się uruchomić Stockfisha."
                     )
                 )
 
                 return@execute
             }
 
-            send("stop")
-            send("position fen $fen")
-            send("go depth $depth")
+            try {
 
-            var evaluation = "?"
+                send("stop")
+                send("isready")
 
-            val moves =
-                linkedMapOf<Int, String>()
+                if (
+                    !waitFor(
+                        "readyok",
+                        3000
+                    )
+                ) {
 
-            while (true) {
+                    callback(
+                        EngineResult(
+                            error =
+                                "Stockfish nie odpowiada."
+                        )
+                    )
 
-                val line =
-                    reader?.readLine()
-                        ?: break
+                    return@execute
+                }
 
-                if (line.startsWith("info ")) {
+                send(
+                    "position fen $fen"
+                )
 
-                    val pv =
-                        Regex(
-                            "multipv (\\d+).*?score (cp|mate) (-?\\d+).*? pv ([a-h][1-8][a-h][1-8][qrbn]?)"
-                        ).find(line)
+                send(
+                    "go depth $depth"
+                )
 
-                    if (pv != null) {
+                val moves =
+                    linkedMapOf<Int, String>()
 
-                        val idx =
-                            pv.groupValues[1].toInt()
+                var evaluation =
+                    "?"
 
-                        val scoreType =
-                            pv.groupValues[2]
+                var gotScore =
+                    false
 
-                        val score =
-                            pv.groupValues[3]
+                var bestMove:
+                    String? = null
 
-                        val move =
-                            pv.groupValues[4]
+                var diagnostic =
+                    ""
 
-                        moves[idx] = move
+                while (true) {
 
-                        if (idx == 1) {
+                    val line =
+                        reader?.readLine()
+                            ?: break
 
-                            evaluation =
-                                if (scoreType == "cp") {
+                    /*
+                     * Zachowujemy ostatnią odpowiedź,
+                     * żeby łatwiej wykryć błędny FEN.
+                     */
+                    if (
+                        line.isNotBlank()
+                    ) {
+                        diagnostic =
+                            line.take(200)
+                    }
 
-                                    "%.2f".format(
-                                        score.toInt() / 100.0
-                                    )
+                    if (
+                        line.startsWith(
+                            "info "
+                        )
+                    ) {
 
-                                } else {
+                        val multiPv =
+                            Regex(
+                                """\bmultipv\s+(\d+)"""
+                            )
+                                .find(line)
+                                ?.groupValues
+                                ?.getOrNull(1)
+                                ?.toIntOrNull()
+                                ?: 1
 
-                                    "M$score"
+                        val scoreMatch =
+                            Regex(
+                                """\bscore\s+(cp|mate)\s+(-?\d+)"""
+                            )
+                                .find(line)
+
+                        val pvMatch =
+                            Regex(
+                                """\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)"""
+                            )
+                                .find(line)
+
+                        if (
+                            scoreMatch != null
+                        ) {
+
+                            val type =
+                                scoreMatch
+                                    .groupValues[1]
+
+                            val raw =
+                                scoreMatch
+                                    .groupValues[2]
+                                    .toIntOrNull()
+
+                            if (raw != null) {
+
+                                gotScore = true
+
+                                if (
+                                    multiPv == 1
+                                ) {
+
+                                    evaluation =
+                                        if (
+                                            type ==
+                                            "cp"
+                                        ) {
+
+                                            String.format(
+                                                java.util.Locale.US,
+                                                "%.2f",
+                                                raw / 100.0
+                                            )
+
+                                        } else {
+
+                                            if (
+                                                raw >= 0
+                                            ) {
+                                                "M$raw"
+                                            } else {
+                                                "-M${-raw}"
+                                            }
+                                        }
                                 }
+                            }
                         }
+
+                        if (
+                            pvMatch != null
+                        ) {
+
+                            val move =
+                                pvMatch
+                                    .groupValues[1]
+
+                            moves[multiPv] =
+                                move
+                        }
+                    }
+
+                    if (
+                        line.startsWith(
+                            "bestmove "
+                        )
+                    ) {
+
+                        bestMove =
+                            line
+                                .substringAfter(
+                                    "bestmove "
+                                )
+                                .substringBefore(" ")
+                                .trim()
+
+                        break
                     }
                 }
 
                 if (
-                    line.startsWith("bestmove ")
+                    bestMove == null ||
+                    bestMove == "(none)" ||
+                    bestMove == "0000"
                 ) {
-                    break
-                }
-            }
 
-            callback(
-                EngineResult(
-                    evaluation = evaluation,
-                    moves =
-                    moves
-                        .toSortedMap()
-                        .values
-                        .toList()
+                    callback(
+                        EngineResult(
+                            error =
+                                "Stockfish nie znalazł ruchu. " +
+                                "Najprawdopodobniej pozycja została źle rozpoznana."
+                        )
+                    )
+
+                    return@execute
+                }
+
+                /*
+                 * Jeżeli MultiPV nie zwróciło żadnego PV,
+                 * przynajmniej pokaż bestmove.
+                 */
+                if (
+                    moves.isEmpty()
+                ) {
+
+                    moves[1] =
+                        bestMove
+                }
+
+                if (!gotScore) {
+
+                    callback(
+                        EngineResult(
+                            evaluation = "?",
+                            moves =
+                                moves
+                                    .toSortedMap()
+                                    .values
+                                    .toList(),
+
+                            error =
+                                "Stockfish znalazł ruch $bestMove, " +
+                                "ale nie zwrócił oceny. Ostatnia odpowiedź: $diagnostic"
+                        )
+                    )
+
+                    return@execute
+                }
+
+                callback(
+                    EngineResult(
+                        evaluation =
+                            evaluation,
+
+                        moves =
+                            moves
+                                .toSortedMap()
+                                .values
+                                .distinct()
+                                .take(5)
+                                .toList()
+                    )
                 )
-            )
+
+            } catch (
+                e: Exception
+            ) {
+
+                callback(
+                    EngineResult(
+                        error =
+                            "Błąd Stockfisha: " +
+                            (
+                                e.message
+                                    ?: e.javaClass.simpleName
+                            )
+                    )
+                )
+            }
         }
     }
 
     fun shutdown() {
 
-        executor.execute {
-
-            try {
-                send("quit")
-            } catch (_: Exception) {
-            }
-
-            process?.destroy()
-            process = null
+        runCatching {
+            send("quit")
         }
+
+        runCatching {
+            process?.destroy()
+        }
+
+        process = null
+        writer = null
+        reader = null
+
+        executor.shutdownNow()
     }
 }
 
