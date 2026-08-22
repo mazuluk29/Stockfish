@@ -60,21 +60,9 @@ class OverlayService : Service() {
     private var sideButton: Button? = null
 
     private var lastFrameTime = 0L
-
     private var lastPlacement: String? = null
 
-    /*
-     * true  = białe na ruchu
-     * false = czarne na ruchu
-     *
-     * Po każdym rozpoznanym nowym ustawieniu
-     * automatycznie zmieniamy stronę.
-     *
-     * Przycisk w overlayu pozwala to poprawić
-     * ręcznie w dowolnym momencie.
-     */
     private var whiteToMove = true
-
     private var currentWhiteAtBottom = true
 
     private val analysing =
@@ -84,10 +72,7 @@ class OverlayService : Service() {
         object : MediaProjection.Callback() {
 
             override fun onStop() {
-                status(
-                    "LIVE • przechwytywanie zatrzymane"
-                )
-
+                status("LIVE • przechwytywanie zatrzymane")
                 releaseCapture(false)
             }
         }
@@ -96,24 +81,18 @@ class OverlayService : Service() {
         super.onCreate()
 
         windowManager =
-            getSystemService(
-                WINDOW_SERVICE
-            ) as WindowManager
+            getSystemService(WINDOW_SERVICE) as WindowManager
 
         engine =
             StockfishEngine(this)
 
         captureThread =
-            HandlerThread(
-                "StockfishCapture"
-            ).apply {
+            HandlerThread("StockfishCapture").apply {
                 start()
             }
 
         captureHandler =
-            Handler(
-                captureThread!!.looper
-            )
+            Handler(captureThread!!.looper)
 
         createChannel()
         createInfoOverlay()
@@ -127,10 +106,7 @@ class OverlayService : Service() {
 
         startNotification()
 
-        if (
-            intent?.action !=
-            ACTION_START_LIVE
-        ) {
+        if (intent?.action != ACTION_START_LIVE) {
             return START_NOT_STICKY
         }
 
@@ -140,18 +116,15 @@ class OverlayService : Service() {
                 Activity.RESULT_CANCELED
             )
 
-        val resultData =
+        val resultData: Intent? =
             if (Build.VERSION.SDK_INT >= 33) {
-
                 intent.getParcelableExtra(
                     EXTRA_RESULT_DATA,
                     Intent::class.java
                 )
-
             } else {
-
                 @Suppress("DEPRECATION")
-                intent.getParcelableExtra<Intent>(
+                intent.getParcelableExtra(
                     EXTRA_RESULT_DATA
                 )
             }
@@ -160,11 +133,7 @@ class OverlayService : Service() {
             resultCode != Activity.RESULT_OK ||
             resultData == null
         ) {
-
-            status(
-                "LIVE • brak zgody na ekran"
-            )
-
+            status("LIVE • brak zgody na ekran")
             return START_NOT_STICKY
         }
 
@@ -196,16 +165,12 @@ class OverlayService : Service() {
                 .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
-
             startForeground(
                 100,
                 notification,
-                ServiceInfo
-                    .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
-
         } else {
-
             startForeground(
                 100,
                 notification
@@ -224,7 +189,6 @@ class OverlayService : Service() {
         lastFrameTime = 0L
 
         mainHandler.post {
-
             analysisText?.text =
                 "Czekam na planszę..."
 
@@ -247,16 +211,11 @@ class OverlayService : Service() {
             )
 
         if (newProjection == null) {
-
-            status(
-                "LIVE • MediaProjection ERROR"
-            )
-
+            status("LIVE • MediaProjection ERROR")
             return
         }
 
-        projection =
-            newProjection
+        projection = newProjection
 
         newProjection.registerCallback(
             projectionCallback,
@@ -288,8 +247,7 @@ class OverlayService : Service() {
                 2
             )
 
-        imageReader =
-            reader
+        imageReader = reader
 
         virtualDisplay =
             newProjection.createVirtualDisplay(
@@ -297,19 +255,14 @@ class OverlayService : Service() {
                 width,
                 height,
                 density,
-                DisplayManager
-                    .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface,
                 null,
                 captureHandler
             )
 
         if (virtualDisplay == null) {
-
-            status(
-                "LIVE • VirtualDisplay ERROR"
-            )
-
+            status("LIVE • VirtualDisplay ERROR")
             return
         }
 
@@ -331,16 +284,13 @@ class OverlayService : Service() {
                     now - lastFrameTime <
                     FRAME_INTERVAL
                 ) {
-
                     image.close()
                     return@setOnImageAvailableListener
                 }
 
-                lastFrameTime =
-                    now
+                lastFrameTime = now
 
                 try {
-
                     val plane =
                         image.planes[0]
 
@@ -384,9 +334,7 @@ class OverlayService : Service() {
 
                     padded.recycle()
 
-                    processFrame(
-                        screen
-                    )
+                    processFrame(screen)
 
                 } catch (error: Throwable) {
 
@@ -399,7 +347,6 @@ class OverlayService : Service() {
                     )
 
                 } finally {
-
                     image.close()
                 }
             },
@@ -412,27 +359,18 @@ class OverlayService : Service() {
     ) {
 
         try {
-
             val result =
-                recognizer.recognize(
-                    bitmap
-                )
+                recognizer.recognize(bitmap)
 
-            /*
-             * Nic przypominającego prawidłową
-             * szachownicę nie znaleziono.
-             */
             if (result == null) {
 
                 status(
                     "LIVE • szukam planszy..."
                 )
 
-                lastPlacement =
-                    null
+                lastPlacement = null
 
                 mainHandler.post {
-
                     analysisText?.text =
                         "Czekam na planszę..."
 
@@ -442,19 +380,14 @@ class OverlayService : Service() {
                 return
             }
 
-            /*
-             * Dodatkowa kontrola poprawności FEN.
-             */
             if (
                 !isPlausiblePosition(
                     result.boardFen
                 )
             ) {
-
                 status(
                     "LIVE • plansza znaleziona, rozpoznaję figury..."
                 )
-
                 return
             }
 
@@ -477,10 +410,6 @@ class OverlayService : Service() {
             val previous =
                 lastPlacement
 
-            /*
-             * Pozycja nie zmieniła się.
-             * Nie ma sensu ponownie odpalać Stockfisha.
-             */
             if (
                 previous ==
                 result.boardFen
@@ -488,10 +417,6 @@ class OverlayService : Service() {
                 return
             }
 
-            /*
-             * Jeżeli mieliśmy poprzednią pozycję,
-             * oznacza to najczęściej wykonanie ruchu.
-             */
             if (previous != null) {
                 whiteToMove =
                     !whiteToMove
@@ -524,20 +449,8 @@ class OverlayService : Service() {
             return
         }
 
-        /*
-         * Z samego obrazu nie możemy niezawodnie
-         * ustalić praw do roszady ani en passant.
-         *
-         * Dlatego używamy:
-         *
-         * - - 0 1
-         *
-         * Dla ogromnej większości pozycji
-         * analiza będzie poprawna.
-         */
         val fen =
             buildString {
-
                 append(placement)
 
                 if (whiteToMove) {
@@ -562,13 +475,9 @@ class OverlayService : Service() {
 
             mainHandler.post {
 
-                if (
-                    result.error != null
-                ) {
-
+                if (result.error != null) {
                     analysisText?.text =
                         result.error
-
                     return@post
                 }
 
@@ -589,9 +498,7 @@ class OverlayService : Service() {
 
                         result.moves
                             .take(5)
-                            .forEachIndexed {
-                                    index,
-                                    move ->
+                            .forEachIndexed { index, move ->
 
                                 append(
                                     "${index + 1}. $move"
@@ -607,10 +514,6 @@ class OverlayService : Service() {
                     result.evaluation
                         .toDoubleOrNull()
 
-                /*
-                 * Pasek pokazujemy zawsze
-                 * z perspektywy białych.
-                 */
                 if (
                     evaluation != null &&
                     !whiteToMove
@@ -625,4 +528,427 @@ class OverlayService : Service() {
                 )
 
                 status(
-                    "LIVE • analiza gotowa
+                    "LIVE • analiza gotowa"
+                )
+            }
+        }
+    }
+
+    private fun isPlausiblePosition(
+        placement: String
+    ): Boolean {
+
+        val rows =
+            placement.split("/")
+
+        if (rows.size != 8) {
+            return false
+        }
+
+        var whiteKing = 0
+        var blackKing = 0
+        var pieceCount = 0
+
+        for (row in rows) {
+
+            var squares = 0
+
+            for (char in row) {
+
+                if (char.isDigit()) {
+                    squares +=
+                        char.digitToInt()
+                } else {
+                    squares++
+
+                    when (char) {
+                        'K' -> {
+                            whiteKing++
+                            pieceCount++
+                        }
+
+                        'k' -> {
+                            blackKing++
+                            pieceCount++
+                        }
+
+                        'Q', 'R', 'B', 'N', 'P',
+                        'q', 'r', 'b', 'n', 'p' -> {
+                            pieceCount++
+                        }
+
+                        else -> {
+                            return false
+                        }
+                    }
+                }
+            }
+
+            if (squares != 8) {
+                return false
+            }
+        }
+
+        if (
+            whiteKing != 1 ||
+            blackKing != 1
+        ) {
+            return false
+        }
+
+        if (
+            pieceCount < 2 ||
+            pieceCount > 32
+        ) {
+            return false
+        }
+
+        return true
+    }
+
+    private fun showBoardOverlay(
+        area: BoardRecognizer.BoardArea,
+        whiteAtBottom: Boolean
+    ) {
+
+        mainHandler.post {
+
+            try {
+                var view =
+                    boardOverlay
+
+                if (view == null) {
+
+                    view =
+                        BoardOverlayView(this)
+
+                    boardOverlay =
+                        view
+                }
+
+                view.whiteAtBottom =
+                    whiteAtBottom
+
+                val currentParams =
+                    view.layoutParams
+                        as? WindowManager.LayoutParams
+
+                if (currentParams == null) {
+
+                    val params =
+                        WindowManager.LayoutParams(
+                            area.size,
+                            area.size,
+                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                            PixelFormat.TRANSLUCENT
+                        )
+
+                    params.gravity =
+                        Gravity.TOP or Gravity.START
+
+                    params.x =
+                        area.left
+
+                    params.y =
+                        area.top
+
+                    windowManager.addView(
+                        view,
+                        params
+                    )
+
+                } else {
+
+                    currentParams.x =
+                        area.left
+
+                    currentParams.y =
+                        area.top
+
+                    currentParams.width =
+                        area.size
+
+                    currentParams.height =
+                        area.size
+
+                    windowManager.updateViewLayout(
+                        view,
+                        currentParams
+                    )
+                }
+
+            } catch (error: Throwable) {
+
+                status(
+                    "LIVE • OVERLAY ERROR: " +
+                        (
+                            error.message
+                                ?: error.javaClass.simpleName
+                        )
+                )
+            }
+        }
+    }
+
+    private fun removeBoardOverlay() {
+
+        val view =
+            boardOverlay
+                ?: return
+
+        runCatching {
+            windowManager.removeView(view)
+        }
+
+        boardOverlay = null
+    }
+
+    private fun createInfoOverlay() {
+
+        val root =
+            LinearLayout(this).apply {
+
+                orientation =
+                    LinearLayout.VERTICAL
+
+                setPadding(
+                    14,
+                    8,
+                    14,
+                    8
+                )
+
+                setBackgroundColor(
+                    0xC0181818.toInt()
+                )
+            }
+
+        statusText =
+            TextView(this).apply {
+
+                text =
+                    "LIVE • oczekiwanie"
+
+                textSize =
+                    14f
+
+                setTextColor(
+                    0xFFFFFFFF.toInt()
+                )
+            }
+
+        analysisText =
+            TextView(this).apply {
+
+                text =
+                    "Czekam na planszę..."
+
+                textSize =
+                    13f
+
+                setTextColor(
+                    0xFFFFFFFF.toInt()
+                )
+            }
+
+        sideButton =
+            Button(this).apply {
+
+                text =
+                    "RUCH: BIAŁE"
+
+                textSize =
+                    11f
+
+                setOnClickListener {
+
+                    whiteToMove =
+                        !whiteToMove
+
+                    updateSideButton()
+
+                    val placement =
+                        lastPlacement
+
+                    if (
+                        placement != null &&
+                        !analysing.get()
+                    ) {
+                        analysePosition(
+                            placement
+                        )
+                    }
+                }
+            }
+
+        root.addView(
+            statusText
+        )
+
+        root.addView(
+            analysisText
+        )
+
+        root.addView(
+            sideButton
+        )
+
+        val params =
+            WindowManager.LayoutParams(
+                390,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            )
+
+        params.gravity =
+            Gravity.TOP or Gravity.START
+
+        params.x = 20
+        params.y = 75
+
+        infoOverlay = root
+
+        windowManager.addView(
+            root,
+            params
+        )
+    }
+
+    private fun updateSideButton() {
+
+        mainHandler.post {
+
+            sideButton?.text =
+                if (whiteToMove) {
+                    "RUCH: BIAŁE"
+                } else {
+                    "RUCH: CZARNE"
+                }
+        }
+    }
+
+    private fun status(
+        text: String
+    ) {
+
+        mainHandler.post {
+
+            statusText?.text =
+                text
+        }
+    }
+
+    private fun createChannel() {
+
+        if (
+            Build.VERSION.SDK_INT <
+            Build.VERSION_CODES.O
+        ) {
+            return
+        }
+
+        val channel =
+            NotificationChannel(
+                "stockfish_live",
+                "Stockfish LIVE",
+                NotificationManager.IMPORTANCE_LOW
+            )
+
+        getSystemService(
+            NotificationManager::class.java
+        )
+            .createNotificationChannel(
+                channel
+            )
+    }
+
+    private fun releaseCapture(
+        stopProjection: Boolean
+    ) {
+
+        runCatching {
+
+            imageReader
+                ?.setOnImageAvailableListener(
+                    null,
+                    null
+                )
+        }
+
+        runCatching {
+            imageReader?.close()
+        }
+
+        imageReader = null
+
+        runCatching {
+            virtualDisplay?.release()
+        }
+
+        virtualDisplay = null
+
+        val oldProjection =
+            projection
+
+        projection = null
+
+        if (oldProjection != null) {
+
+            runCatching {
+
+                oldProjection.unregisterCallback(
+                    projectionCallback
+                )
+            }
+
+            if (stopProjection) {
+
+                runCatching {
+                    oldProjection.stop()
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+
+        releaseCapture(true)
+
+        runCatching {
+            engine.shutdown()
+        }
+
+        mainHandler.post {
+
+            removeBoardOverlay()
+
+            infoOverlay?.let {
+
+                runCatching {
+                    windowManager.removeView(it)
+                }
+            }
+
+            infoOverlay = null
+        }
+
+        captureThread
+            ?.quitSafely()
+
+        captureThread = null
+        captureHandler = null
+
+        super.onDestroy()
+    }
+
+    override fun onBind(
+        intent: Intent?
+    ): IBinder? {
+        return null
+    }
+}
