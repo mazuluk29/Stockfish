@@ -30,26 +30,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 class OverlayService : Service() {
 
     companion object {
-        const val ACTION_START_LIVE = "START_LIVE"
-        const val EXTRA_RESULT_CODE = "resultCode"
-        const val EXTRA_RESULT_DATA = "resultData"
+
+        const val ACTION_START_LIVE =
+            "START_LIVE"
+
+        const val EXTRA_RESULT_CODE =
+            "resultCode"
+
+        const val EXTRA_RESULT_DATA =
+            "resultData"
+
+        private const val FRAME_INTERVAL =
+            1200L
 
         /*
-         * Pełne rozpoznanie pozycji co 400 ms.
-         *
-         * Bez quickSignature, debounce,
-         * stabilizacji i potwierdzania 2/2.
+         * Korekta położenia strzałek.
+         * Overlay przesuwamy o około 0.7 pola w górę.
          */
-        private const val FRAME_INTERVAL = 400L
-
-        /*
-         * Korekta pozycji strzałek.
-         */
-        private const val BOARD_Y_CORRECTION_SQUARES = 0.70f
+        private const val BOARD_Y_CORRECTION_SQUARES =
+            0.70f
     }
 
-    private lateinit var windowManager: WindowManager
-    private lateinit var engine: StockfishEngine
+    private lateinit var windowManager:
+        WindowManager
+
+    private lateinit var engine:
+        StockfishEngine
 
     private val recognizer =
         BoardRecognizer()
@@ -62,43 +68,57 @@ class OverlayService : Service() {
     private val analysing =
         AtomicBoolean(false)
 
-    private var projection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
+    private var projection:
+        MediaProjection? = null
 
-    private var captureThread: HandlerThread? = null
-    private var captureHandler: Handler? = null
+    private var virtualDisplay:
+        VirtualDisplay? = null
 
-    private var infoOverlay: LinearLayout? = null
-    private var boardOverlay: BoardOverlayView? = null
+    private var imageReader:
+        ImageReader? = null
 
-    private var statusText: TextView? = null
-    private var analysisText: TextView? = null
-    private var sideButton: Button? = null
+    private var captureThread:
+        HandlerThread? = null
 
-    private var lastFrameTime = 0L
+    private var captureHandler:
+        Handler? = null
+
+    private var infoOverlay:
+        LinearLayout? = null
+
+    private var boardOverlay:
+        BoardOverlayView? = null
+
+    private var statusText:
+        TextView? = null
+
+    private var analysisText:
+        TextView? = null
+
+    private var sideButton:
+        Button? = null
+
+    private var refreshButton:
+        Button? = null
+
+    private var lastFrameTime =
+        0L
+
+    private var lastPlacement:
+        String? = null
 
     /*
-     * Ostatni poprawny układ figur,
-     * który został wysłany do Stockfisha.
-     */
-    private var lastPlacement: String? = null
-
-    /*
-     * Ustawiane WYŁĄCZNIE przez użytkownika.
+     * true  = BIAŁE DÓŁ
+     * false = CZARNE DÓŁ
      *
-     * true:
-     * BIAŁE DÓŁ
-     * Stockfish szuka ruchu białych.
-     *
-     * false:
-     * CZARNE DÓŁ
-     * Stockfish szuka ruchu czarnych.
+     * Zmieniasz to tylko ręcznie.
      */
-    private var whiteAtBottom = true
+    private var whiteAtBottom =
+        true
 
     private val projectionCallback =
-        object : MediaProjection.Callback() {
+        object :
+            MediaProjection.Callback() {
 
             override fun onStop() {
 
@@ -113,6 +133,7 @@ class OverlayService : Service() {
         }
 
     override fun onCreate() {
+
         super.onCreate()
 
         windowManager =
@@ -153,6 +174,7 @@ class OverlayService : Service() {
             intent?.action !=
             ACTION_START_LIVE
         ) {
+
             return START_NOT_STICKY
         }
 
@@ -162,9 +184,12 @@ class OverlayService : Service() {
                 Activity.RESULT_CANCELED
             )
 
-        val resultData: Intent? =
+        val resultData:
+            Intent? =
+
             if (
-                Build.VERSION.SDK_INT >= 33
+                Build.VERSION.SDK_INT >=
+                33
             ) {
 
                 intent.getParcelableExtra(
@@ -181,7 +206,8 @@ class OverlayService : Service() {
             }
 
         if (
-            resultCode != Activity.RESULT_OK ||
+            resultCode !=
+            Activity.RESULT_OK ||
             resultData == null
         ) {
 
@@ -208,7 +234,8 @@ class OverlayService : Service() {
                 "stockfish_live"
             )
                 .setSmallIcon(
-                    android.R.drawable.ic_menu_search
+                    android.R.drawable
+                        .ic_menu_search
                 )
                 .setContentTitle(
                     "Stockfish Overlay"
@@ -216,11 +243,14 @@ class OverlayService : Service() {
                 .setContentText(
                     "Analiza planszy aktywna"
                 )
-                .setOngoing(true)
+                .setOngoing(
+                    true
+                )
                 .build()
 
         if (
-            Build.VERSION.SDK_INT >= 29
+            Build.VERSION.SDK_INT >=
+            29
         ) {
 
             startForeground(
@@ -248,14 +278,6 @@ class OverlayService : Service() {
             true
         )
 
-        /*
-         * Jeżeli BoardRecognizer ma cache,
-         * zerujemy go przy nowym przechwytywaniu.
-         */
-        runCatching {
-            recognizer.reset()
-        }
-
         lastPlacement =
             null
 
@@ -280,13 +302,13 @@ class OverlayService : Service() {
             "LIVE • uruchamianie..."
         )
 
-        val projectionManager =
+        val manager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
         val newProjection =
-            projectionManager
+            manager
                 .getMediaProjection(
                     resultCode,
                     data
@@ -332,12 +354,13 @@ class OverlayService : Service() {
             metrics.densityDpi
 
         val reader =
-            ImageReader.newInstance(
-                width,
-                height,
-                PixelFormat.RGBA_8888,
-                2
-            )
+            ImageReader
+                .newInstance(
+                    width,
+                    height,
+                    PixelFormat.RGBA_8888,
+                    2
+                )
 
         imageReader =
             reader
@@ -381,14 +404,12 @@ class OverlayService : Service() {
                             ?: return@setOnImageAvailableListener
 
                     val now =
-                        System.currentTimeMillis()
+                        System
+                            .currentTimeMillis()
 
-                    /*
-                     * Ograniczenie do około
-                     * 2,5 pełnego rozpoznania / sekundę.
-                     */
                     if (
-                        now - lastFrameTime <
+                        now -
+                        lastFrameTime <
                         FRAME_INTERVAL
                     ) {
 
@@ -416,7 +437,8 @@ class OverlayService : Service() {
 
                         val rowPadding =
                             rowStride -
-                                pixelStride * width
+                                pixelStride *
+                                width
 
                         val bitmapWidth =
                             width +
@@ -451,16 +473,15 @@ class OverlayService : Service() {
                         )
 
                     } catch (
-                        error: Throwable
+                        error:
+                            Throwable
                     ) {
 
                         status(
                             "LIVE • ERROR: " +
                                 (
                                     error.message
-                                        ?: error
-                                            .javaClass
-                                            .simpleName
+                                        ?: error.javaClass.simpleName
                                 )
                         )
 
@@ -479,22 +500,12 @@ class OverlayService : Service() {
 
         try {
 
-            /*
-             * Nie ma już szybkich podpisów,
-             * debounce ani stabilizacji.
-             *
-             * Po prostu co 400 ms próbujemy
-             * odczytać aktualny FEN.
-             */
             val result =
                 recognizer
                     .recognize(
                         bitmap
                     )
 
-            /*
-             * Nie znaleziono prawidłowej planszy.
-             */
             if (
                 result == null
             ) {
@@ -506,94 +517,63 @@ class OverlayService : Service() {
                 return
             }
 
-            val placement =
-                result.boardFen
-
-            /*
-             * Pokazujemy overlay już wtedy,
-             * gdy sama plansza została znaleziona.
-             */
-            showBoardOverlay(
-                result.area
-            )
-
-            /*
-             * Rozpoznano planszę, ale układ figur
-             * nie przechodzi podstawowej kontroli.
-             *
-             * Pokazujemy FEN diagnostycznie.
-             */
             if (
                 !isPlausiblePosition(
-                    placement
+                    result.boardFen
                 )
             ) {
 
                 status(
-                    "LIVE • rozpoznaję figury..."
+                    "LIVE • plansza znaleziona"
                 )
 
                 mainHandler.post {
 
                     analysisText?.text =
-                        "Odczyt FEN:\n" +
-                            placement
+                        "Niepewne rozpoznanie figur:\n" +
+                            result.boardFen
                 }
 
                 return
             }
 
+            status(
+                if (
+                    whiteAtBottom
+                ) {
+
+                    "LIVE • plansza OK • BIAŁE DÓŁ"
+
+                } else {
+
+                    "LIVE • plansza OK • CZARNE DÓŁ"
+                }
+            )
+
+            showBoardOverlay(
+                result.area
+            )
+
             /*
-             * Pozycja jest taka sama jak poprzednio.
-             * Niczego nie analizujemy ponownie.
+             * Pozycja bez zmian:
+             * nie uruchamiamy kolejnej analizy.
              */
             if (
-                placement ==
-                lastPlacement
+                lastPlacement ==
+                result.boardFen
             ) {
-
-                status(
-                    if (
-                        whiteAtBottom
-                    ) {
-
-                        "LIVE • gotowy • BIAŁE DÓŁ"
-
-                    } else {
-
-                        "LIVE • gotowy • CZARNE DÓŁ"
-                    }
-                )
 
                 return
             }
 
             /*
-             * NOWA POPRAWNA POZYCJA.
+             * Nie zmieniamy automatycznie koloru.
              */
             lastPlacement =
-                placement
-
-            status(
-                "LIVE • nowa pozycja"
-            )
+                result.boardFen
 
             analysePosition(
-                placement
-            )
-
-        } catch (
-            error: Throwable
-        ) {
-
-            status(
-                "LIVE • FRAME ERROR: " +
-                    (
-                        error.message
-                            ?: error
-                                .javaClass
-                                .simpleName
-                    )
+                result.boardFen
             )
 
         } finally {
@@ -611,23 +591,22 @@ class OverlayService : Service() {
         placement: String
     ) {
 
-        /*
-         * Jeżeli poprzednia analiza jeszcze trwa,
-         * nie odpalamy drugiego Stockfisha naraz.
-         */
         if (
-            analysing.getAndSet(
-                true
-            )
+            analysing
+                .getAndSet(
+                    true
+                )
         ) {
 
             return
         }
 
         /*
-         * Wybrany kolor określa:
-         * - orientację planszy,
-         * - stronę na ruchu.
+         * BIAŁE DÓŁ:
+         * szukamy najlepszych ruchów białych.
+         *
+         * CZARNE DÓŁ:
+         * szukamy najlepszych ruchów czarnych.
          */
         val side =
             if (
@@ -667,152 +646,271 @@ class OverlayService : Service() {
                     )
 
                     append(
-                        "Analizuję...\n"
-                    )
-
-                    append(
-                        "FEN:\n"
-                    )
-
-                    append(
-                        fen
+                        "Stockfish analizuje..."
                     )
                 }
         }
 
-        engine
-            .analyzeFen(
-                fen,
-                13
-            ) { result ->
+        engine.analyzeFen(
+            fen,
+            16
+        ) { result ->
 
-                analysing.set(
-                    false
-                )
+            analysing.set(
+                false
+            )
 
-                mainHandler.post {
+            mainHandler.post {
 
-                    if (
-                        result.error != null
-                    ) {
-
-                        analysisText?.text =
-                            buildString {
-
-                                append(
-                                    "BŁĄD:\n"
-                                )
-
-                                append(
-                                    result.error
-                                )
-
-                                append(
-                                    "\n\nFEN:\n"
-                                )
-
-                                append(
-                                    fen
-                                )
-                            }
-
-                        status(
-                            "LIVE • błąd analizy"
-                        )
-
-                        return@post
-                    }
+                if (
+                    result.error != null
+                ) {
 
                     analysisText?.text =
-                        buildString {
-
-                            append(
-                                if (
-                                    whiteAtBottom
-                                ) {
-
-                                    "GRAM: BIAŁE\n"
-
-                                } else {
-
-                                    "GRAM: CZARNE\n"
-                                }
-                            )
-
-                            append(
-                                "Ocena: "
-                            )
-
-                            append(
-                                result.evaluation
-                            )
-
-                            append(
-                                "\n"
-                            )
-
-                            result.moves
-                                .take(5)
-                                .forEachIndexed {
-                                    index,
-                                    move ->
-
-                                    append(
-                                        "${index + 1}. $move"
-                                    )
-
-                                    if (
-                                        index < 4
-                                    ) {
-
-                                        append(
-                                            "\n"
-                                        )
-                                    }
-                                }
-                        }
-
-                    var evaluation =
-                        result
-                            .evaluation
-                            .toDoubleOrNull()
-
-                    /*
-                     * Pasek oceny pokazujemy
-                     * z perspektywy białych.
-                     */
-                    if (
-                        evaluation != null &&
-                        !whiteAtBottom
-                    ) {
-
-                        evaluation =
-                            -evaluation
-                    }
-
-                    boardOverlay
-                        ?.whiteAtBottom =
-                        whiteAtBottom
-
-                    boardOverlay
-                        ?.update(
-                            evaluation,
-                            result.moves
-                        )
+                        "BŁĄD:\n" +
+                            result.error +
+                            "\n\nFEN:\n" +
+                            fen
 
                     status(
-                        if (
-                            whiteAtBottom
-                        ) {
-
-                            "LIVE • gotowy • BIAŁE DÓŁ"
-
-                        } else {
-
-                            "LIVE • gotowy • CZARNE DÓŁ"
-                        }
+                        "LIVE • błąd analizy"
                     )
+
+                    return@post
                 }
+
+                val classifiedMoves =
+                    classifyMoves(
+                        result.lines
+                    )
+
+                analysisText?.text =
+                    buildString {
+
+                        append(
+                            if (
+                                whiteAtBottom
+                            ) {
+
+                                "GRAM: BIAŁE\n"
+
+                            } else {
+
+                                "GRAM: CZARNE\n"
+                            }
+                        )
+
+                        append(
+                            "Ocena: ${result.evaluation}\n\n"
+                        )
+
+                        classifiedMoves
+                            .take(5)
+                            .forEachIndexed {
+                                index,
+                                move ->
+
+                                append(
+                                    "#${move.rank} "
+                                )
+
+                                append(
+                                    move.move
+                                )
+
+                                append(
+                                    "  "
+                                )
+
+                                append(
+                                    move.evaluation
+                                )
+
+                                append(
+                                    "  "
+                                )
+
+                                append(
+                                    move.quality.label
+                                )
+
+                                if (
+                                    index <
+                                    classifiedMoves.size -
+                                    1
+                                ) {
+
+                                    append(
+                                        "\n"
+                                    )
+                                }
+                            }
+                    }
+
+                var evaluation =
+                    result.evaluation
+                        .toDoubleOrNull()
+
+                /*
+                 * Pasek ewaluacji z perspektywy białych.
+                 */
+                if (
+                    evaluation != null &&
+                    !whiteAtBottom
+                ) {
+
+                    evaluation =
+                        -evaluation
+                }
+
+                boardOverlay
+                    ?.whiteAtBottom =
+                    whiteAtBottom
+
+                boardOverlay
+                    ?.update(
+                        evaluation,
+                        classifiedMoves
+                    )
+
+                status(
+                    "LIVE • analiza gotowa"
+                )
+            }
+        }
+    }
+
+    /*
+     * Klasyfikacja propozycji ruchów.
+     *
+     * Nie jest to algorytm Chess.com 1:1,
+     * ale daje podobną interpretację jakości
+     * na podstawie różnicy względem najlepszego ruchu.
+     */
+    private fun classifyMoves(
+        lines:
+            List<EngineLine>
+    ): List<OverlayMove> {
+
+        if (
+            lines.isEmpty()
+        ) {
+
+            return emptyList()
+        }
+
+        fun score(
+            line:
+                EngineLine
+        ): Int {
+
+            line.centipawns
+                ?.let {
+
+                    return it
+                }
+
+            line.mate
+                ?.let {
+
+                    return if (
+                        it > 0
+                    ) {
+
+                        100000 -
+                            it * 100
+
+                    } else {
+
+                        -100000 -
+                            it * 100
+                    }
+                }
+
+            return -1000000
+        }
+
+        val bestLine =
+            lines.first()
+
+        val bestScore =
+            score(
+                bestLine
+            )
+
+        return lines
+            .take(5)
+            .map {
+                line ->
+
+                val currentScore =
+                    score(
+                        line
+                    )
+
+                val loss =
+                    (
+                        bestScore -
+                            currentScore
+                        )
+                        .coerceAtLeast(
+                            0
+                        )
+
+                val quality =
+                    when {
+
+                        /*
+                         * Najlepszy ruch.
+                         */
+                        line.rank == 1 -> {
+
+                            MoveQuality.BEST
+                        }
+
+                        /*
+                         * Prawie identyczny
+                         * z najlepszym.
+                         */
+                        loss <= 15 -> {
+
+                            MoveQuality.EXCELLENT
+                        }
+
+                        loss <= 40 -> {
+
+                            MoveQuality.GOOD
+                        }
+
+                        loss <= 90 -> {
+
+                            MoveQuality.INACCURACY
+                        }
+
+                        loss <= 180 -> {
+
+                            MoveQuality.MISTAKE
+                        }
+
+                        else -> {
+
+                            MoveQuality.BLUNDER
+                        }
+                    }
+
+                OverlayMove(
+                    rank =
+                        line.rank,
+
+                    move =
+                        line.move,
+
+                    evaluation =
+                        line.evaluation,
+
+                    quality =
+                        quality
+                )
             }
     }
 
@@ -833,15 +931,21 @@ class OverlayService : Service() {
             return false
         }
 
-        var whiteKing = 0
-        var blackKing = 0
-        var pieces = 0
+        var whiteKing =
+            0
+
+        var blackKing =
+            0
+
+        var pieces =
+            0
 
         for (
             row in rows
         ) {
 
-            var squares = 0
+            var squares =
+                0
 
             for (
                 char in row
@@ -851,19 +955,9 @@ class OverlayService : Service() {
                     char.isDigit()
                 ) {
 
-                    val amount =
+                    squares +=
                         char
                             .digitToInt()
-
-                    if (
-                        amount !in 1..8
-                    ) {
-
-                        return false
-                    }
-
-                    squares +=
-                        amount
 
                     continue
                 }
@@ -915,26 +1009,11 @@ class OverlayService : Service() {
             }
         }
 
-        /*
-         * Musi być dokładnie jeden król
-         * każdego koloru.
-         */
-        if (
-            whiteKing != 1 ||
-            blackKing != 1
-        ) {
-
-            return false
-        }
-
-        if (
-            pieces !in 2..32
-        ) {
-
-            return false
-        }
-
-        return true
+        return (
+            whiteKing == 1 &&
+                blackKing == 1 &&
+                pieces in 2..32
+            )
     }
 
     private fun showBoardOverlay(
@@ -962,12 +1041,12 @@ class OverlayService : Service() {
                         view
                 }
 
+                /*
+                 * Orientacja ręczna.
+                 */
                 view.whiteAtBottom =
                     whiteAtBottom
 
-                /*
-                 * Korekta Y o 0,7 pola do góry.
-                 */
                 val squareSize =
                     area.size /
                         8f
@@ -976,7 +1055,8 @@ class OverlayService : Service() {
                     (
                         squareSize *
                             BOARD_Y_CORRECTION_SQUARES
-                    ).toInt()
+                        )
+                        .toInt()
 
                 val correctedTop =
                     area.top -
@@ -985,33 +1065,30 @@ class OverlayService : Service() {
                 val currentParams =
                     view.layoutParams
                         as?
-                        WindowManager
-                            .LayoutParams
+                        WindowManager.LayoutParams
 
                 if (
                     currentParams == null
                 ) {
 
                     val params =
-                        WindowManager
-                            .LayoutParams(
-                                area.size,
-                                area.size,
+                        WindowManager.LayoutParams(
+                            area.size,
+                            area.size,
 
+                            WindowManager
+                                .LayoutParams
+                                .TYPE_APPLICATION_OVERLAY,
+
+                            WindowManager
+                                .LayoutParams
+                                .FLAG_NOT_FOCUSABLE or
                                 WindowManager
                                     .LayoutParams
-                                    .TYPE_APPLICATION_OVERLAY,
+                                    .FLAG_NOT_TOUCHABLE,
 
-                                WindowManager
-                                    .LayoutParams
-                                    .FLAG_NOT_FOCUSABLE or
-                                    WindowManager
-                                        .LayoutParams
-                                        .FLAG_NOT_TOUCHABLE,
-
-                                PixelFormat
-                                    .TRANSLUCENT
-                            )
+                            PixelFormat.TRANSLUCENT
+                        )
 
                     params.gravity =
                         Gravity.TOP or
@@ -1051,16 +1128,15 @@ class OverlayService : Service() {
                 }
 
             } catch (
-                error: Throwable
+                error:
+                    Throwable
             ) {
 
                 status(
                     "LIVE • OVERLAY ERROR: " +
                         (
                             error.message
-                                ?: error
-                                    .javaClass
-                                    .simpleName
+                                ?: error.javaClass.simpleName
                         )
                 )
             }
@@ -1150,9 +1226,6 @@ class OverlayService : Service() {
                 textSize =
                     11f
 
-                /*
-                 * Orientację zmienia tylko użytkownik.
-                 */
                 setOnClickListener {
 
                     whiteAtBottom =
@@ -1160,6 +1233,9 @@ class OverlayService : Service() {
 
                     updateSideButton()
 
+                    /*
+                     * Obracamy obecne strzałki.
+                     */
                     boardOverlay
                         ?.whiteAtBottom =
                         whiteAtBottom
@@ -1168,9 +1244,9 @@ class OverlayService : Service() {
                         ?.invalidate()
 
                     /*
-                     * Po ręcznej zmianie koloru
-                     * ponownie analizujemy tę samą
-                     * pozycję dla drugiej strony.
+                     * Zmieniamy stronę na ruchu
+                     * i ponownie analizujemy
+                     * aktualną pozycję.
                      */
                     val placement =
                         lastPlacement
@@ -1187,6 +1263,37 @@ class OverlayService : Service() {
                 }
             }
 
+        refreshButton =
+            Button(
+                this
+            ).apply {
+
+                text =
+                    "ODŚWIEŻ"
+
+                textSize =
+                    11f
+
+                setOnClickListener {
+
+                    /*
+                     * Dzięki temu kolejna klatka
+                     * zostanie potraktowana jako
+                     * nowa pozycja, nawet jeśli
+                     * FEN się nie zmienił.
+                     */
+                    lastPlacement =
+                        null
+
+                    status(
+                        "LIVE • odświeżam..."
+                    )
+
+                    analysisText?.text =
+                        "Ponowne rozpoznawanie planszy..."
+                }
+            }
+
         root.addView(
             statusText
         )
@@ -1199,29 +1306,31 @@ class OverlayService : Service() {
             sideButton
         )
 
+        root.addView(
+            refreshButton
+        )
+
         val params =
-            WindowManager
-                .LayoutParams(
-                    500,
+            WindowManager.LayoutParams(
+                470,
 
+                WindowManager
+                    .LayoutParams
+                    .WRAP_CONTENT,
+
+                WindowManager
+                    .LayoutParams
+                    .TYPE_APPLICATION_OVERLAY,
+
+                WindowManager
+                    .LayoutParams
+                    .FLAG_NOT_FOCUSABLE or
                     WindowManager
                         .LayoutParams
-                        .WRAP_CONTENT,
+                        .FLAG_NOT_TOUCH_MODAL,
 
-                    WindowManager
-                        .LayoutParams
-                        .TYPE_APPLICATION_OVERLAY,
-
-                    WindowManager
-                        .LayoutParams
-                        .FLAG_NOT_FOCUSABLE or
-                        WindowManager
-                            .LayoutParams
-                            .FLAG_NOT_TOUCH_MODAL,
-
-                    PixelFormat
-                        .TRANSLUCENT
-                )
+                PixelFormat.TRANSLUCENT
+            )
 
         params.gravity =
             Gravity.TOP or
@@ -1257,6 +1366,18 @@ class OverlayService : Service() {
                 } else {
 
                     "CZARNE DÓŁ"
+                }
+
+            statusText?.text =
+                if (
+                    whiteAtBottom
+                ) {
+
+                    "LIVE • ustawiono BIAŁE DÓŁ"
+
+                } else {
+
+                    "LIVE • ustawiono CZARNE DÓŁ"
                 }
         }
     }
@@ -1299,7 +1420,8 @@ class OverlayService : Service() {
     }
 
     private fun releaseCapture(
-        stopProjection: Boolean
+        stopProjection:
+            Boolean
     ) {
 
         runCatching {
@@ -1405,7 +1527,8 @@ class OverlayService : Service() {
     }
 
     override fun onBind(
-        intent: Intent?
+        intent:
+            Intent?
     ): IBinder? {
 
         return null
