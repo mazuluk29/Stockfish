@@ -21,28 +21,28 @@ class BoardOverlayView(
     private var evaluation =
         0.0
 
-    private var moves:
-        List<String> =
-        emptyList()
+    private var moves =
+        emptyList<String>()
 
     var whiteAtBottom =
         true
 
     fun update(
-        eval: Double?,
-        bestMoves: List<String>
+        evaluation: Double?,
+        moves: List<String>
     ) {
 
-        if (eval != null) {
-            evaluation =
-                eval.coerceIn(
+        if (evaluation != null) {
+
+            this.evaluation =
+                evaluation.coerceIn(
                     -15.0,
                     15.0
                 )
         }
 
-        moves =
-            bestMoves.take(3)
+        this.moves =
+            moves.take(3)
 
         invalidate()
     }
@@ -53,7 +53,7 @@ class BoardOverlayView(
 
         super.onDraw(canvas)
 
-        drawEvaluationBar(
+        drawEvalBar(
             canvas
         )
 
@@ -61,7 +61,7 @@ class BoardOverlayView(
                 index,
                 move ->
 
-            drawMove(
+            drawArrow(
                 canvas,
                 move,
                 index
@@ -69,31 +69,31 @@ class BoardOverlayView(
         }
     }
 
-    private fun drawEvaluationBar(
+    private fun drawEvalBar(
         canvas: Canvas
     ) {
 
         val barWidth =
-            20f
+            18f
 
-        val height =
+        val h =
             height.toFloat()
 
         val whiteShare =
             1.0 /
                 (
                     1.0 +
-                    exp(
-                        -evaluation /
-                            2.2
+                        exp(
+                            -evaluation /
+                                2.2
+                        )
                     )
-                )
 
         val blackHeight =
             (
-                height *
-                (1.0 - whiteShare)
-            ).toFloat()
+                h *
+                    (1.0 - whiteShare)
+                ).toFloat()
 
         paint.style =
             Paint.Style.FILL
@@ -124,31 +124,42 @@ class BoardOverlayView(
             0f,
             blackHeight,
             barWidth,
-            height,
+            h,
             paint
         )
     }
 
-    private fun drawMove(
+    private fun drawArrow(
         canvas: Canvas,
         move: String,
         index: Int
     ) {
 
-        if (move.length < 4)
+        if (move.length < 4) {
             return
+        }
 
         val from =
-            move.substring(0, 2)
+            move.substring(
+                0,
+                2
+            )
 
         val to =
-            move.substring(2, 4)
+            move.substring(
+                2,
+                4
+            )
 
         val start =
-            squareCenter(from)
+            squareCenter(
+                from
+            )
 
         val end =
-            squareCenter(to)
+            squareCenter(
+                to
+            )
 
         val cell =
             width / 8f
@@ -161,13 +172,20 @@ class BoardOverlayView(
 
         paint.strokeWidth =
             when (index) {
-                0 -> cell * 0.14f
-                1 -> cell * 0.10f
-                else -> cell * 0.075f
+
+                0 ->
+                    cell * 0.14f
+
+                1 ->
+                    cell * 0.10f
+
+                else ->
+                    cell * 0.075f
             }
 
         paint.color =
             when (index) {
+
                 0 ->
                     Color.argb(
                         210,
@@ -178,7 +196,7 @@ class BoardOverlayView(
 
                 1 ->
                     Color.argb(
-                        170,
+                        175,
                         240,
                         180,
                         50
@@ -186,10 +204,10 @@ class BoardOverlayView(
 
                 else ->
                     Color.argb(
-                        145,
-                        80,
-                        160,
-                        230
+                        150,
+                        70,
+                        150,
+                        235
                     )
             }
 
@@ -229,7 +247,7 @@ class BoardOverlayView(
             )
 
         val length =
-            cell * 0.28f
+            cell * 0.30f
 
         val spread =
             0.55f
@@ -237,34 +255,34 @@ class BoardOverlayView(
         val x1 =
             endX -
                 length *
-                cos(
-                    angle -
-                        spread
-                )
+                    cos(
+                        angle -
+                            spread
+                    )
 
         val y1 =
             endY -
                 length *
-                sin(
-                    angle -
-                        spread
-                )
+                    sin(
+                        angle -
+                            spread
+                    )
 
         val x2 =
             endX -
                 length *
-                cos(
-                    angle +
-                        spread
-                )
+                    cos(
+                        angle +
+                            spread
+                    )
 
         val y2 =
             endY -
                 length *
-                sin(
-                    angle +
-                        spread
-                )
+                    sin(
+                        angle +
+                            spread
+                    )
 
         val path =
             Path()
@@ -313,13 +331,19 @@ class BoardOverlayView(
 
         if (whiteAtBottom) {
 
-            col = file
-            row = 8 - rank
+            col =
+                file
+
+            row =
+                8 - rank
 
         } else {
 
-            col = 7 - file
-            row = rank - 1
+            col =
+                7 - file
+
+            row =
+                rank - 1
         }
 
         val cell =
