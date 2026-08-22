@@ -6,7 +6,23 @@ import java.io.BufferedWriter
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.util.Locale
 import java.util.concurrent.Executors
+
+data class EngineLine(
+    val rank: Int,
+    val move: String,
+    val evaluation: String,
+    val centipawns: Int?,
+    val mate: Int?
+)
+
+data class EngineResult(
+    val evaluation: String = "?",
+    val moves: List<String> = emptyList(),
+    val lines: List<EngineLine> = emptyList(),
+    val error: String? = null
+)
 
 class StockfishEngine(
     private val context: Context
@@ -37,8 +53,7 @@ class StockfishEngine(
             return true
         }
 
-        val file =
-            engineFile()
+        val file = engineFile()
 
         if (!file.exists()) {
             return false
@@ -47,9 +62,7 @@ class StockfishEngine(
         return try {
 
             process =
-                ProcessBuilder(
-                    file.absolutePath
-                )
+                ProcessBuilder(file.absolutePath)
                     .redirectErrorStream(true)
                     .start()
 
@@ -69,23 +82,17 @@ class StockfishEngine(
 
             send("uci")
 
-            waitFor(
-                "uciok",
-                5000
-            )
+            if (!waitFor("uciok", 5000)) {
+                return false
+            }
 
-            send(
-                "setoption name MultiPV value 5"
-            )
-
+            send("setoption name MultiPV value 5")
             send("isready")
 
             waitFor(
                 "readyok",
                 5000
             )
-
-            true
 
         } catch (_: Exception) {
 
@@ -102,7 +109,6 @@ class StockfishEngine(
     ) {
 
         writer?.apply {
-
             write(command)
             newLine()
             flush()
@@ -127,7 +133,6 @@ class StockfishEngine(
         ) {
 
             if (!input.ready()) {
-
                 Thread.sleep(5)
                 continue
             }
@@ -136,11 +141,7 @@ class StockfishEngine(
                 input.readLine()
                     ?: return false
 
-            if (
-                line.contains(
-                    wanted
-                )
-            ) {
+            if (line.contains(wanted)) {
                 return true
             }
         }
@@ -150,7 +151,7 @@ class StockfishEngine(
 
     fun analyzeFen(
         fen: String,
-        depth: Int = 14,
+        depth: Int = 16,
         callback: (EngineResult) -> Unit
     ) {
 
@@ -173,12 +174,7 @@ class StockfishEngine(
                 send("stop")
                 send("isready")
 
-                if (
-                    !waitFor(
-                        "readyok",
-                        3000
-                    )
-                ) {
+                if (!waitFor("readyok", 3000)) {
 
                     callback(
                         EngineResult(
@@ -191,6 +187,10 @@ class StockfishEngine(
                 }
 
                 send(
+                    "setoption name MultiPV value 5"
+                )
+
+                send(
                     "position fen $fen"
                 )
 
@@ -198,20 +198,17 @@ class StockfishEngine(
                     "go depth $depth"
                 )
 
-                val moves =
-                    linkedMapOf<Int, String>()
+                data class MutableLine(
+                    var move: String = "",
+                    var cp: Int? = null,
+                    var mate: Int? = null
+                )
 
-                var evaluation =
-                    "?"
+                val resultLines =
+                    mutableMapOf<Int, MutableLine>()
 
-                var gotScore =
-                    false
-
-                var bestMove:
-                    String? = null
-
-                var diagnostic =
-                    ""
+                var bestMove: String? =
+                    null
 
                 while (true) {
 
@@ -219,24 +216,13 @@ class StockfishEngine(
                         reader?.readLine()
                             ?: break
 
-                    /*
-                     * Zachowujemy ostatnią odpowiedź,
-                     * żeby łatwiej wykryć błędny FEN.
-                     */
-                    if (
-                        line.isNotBlank()
-                    ) {
-                        diagnostic =
-                            line.take(200)
-                    }
-
                     if (
                         line.startsWith(
                             "info "
                         )
                     ) {
 
-                        val multiPv =
+                        val pvNumber =
                             Regex(
                                 """\bmultipv\s+(\d+)"""
                             )
@@ -246,75 +232,50 @@ class StockfishEngine(
                                 ?.toIntOrNull()
                                 ?: 1
 
-                        val scoreMatch =
+                        val move =
+                            Regex(
+                                """\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)"""
+                            )
+                                .find(line)
+                                ?.groupValues
+                                ?.getOrNull(1)
+
+                        val score =
                             Regex(
                                 """\bscore\s+(cp|mate)\s+(-?\d+)"""
                             )
                                 .find(line)
 
-                        val pvMatch =
-                            Regex(
-                                """\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)"""
-                            )
-                                .find(line)
-
-                        if (
-                            scoreMatch != null
-                        ) {
-
-                            val type =
-                                scoreMatch
-                                    .groupValues[1]
-
-                            val raw =
-                                scoreMatch
-                                    .groupValues[2]
-                                    .toIntOrNull()
-
-                            if (raw != null) {
-
-                                gotScore = true
-
-                                if (
-                                    multiPv == 1
-                                ) {
-
-                                    evaluation =
-                                        if (
-                                            type ==
-                                            "cp"
-                                        ) {
-
-                                            String.format(
-                                                java.util.Locale.US,
-                                                "%.2f",
-                                                raw / 100.0
-                                            )
-
-                                        } else {
-
-                                            if (
-                                                raw >= 0
-                                            ) {
-                                                "M$raw"
-                                            } else {
-                                                "-M${-raw}"
-                                            }
-                                        }
-                                }
+                        val item =
+                            resultLines.getOrPut(
+                                pvNumber
+                            ) {
+                                MutableLine()
                             }
+
+                        if (move != null) {
+                            item.move = move
                         }
 
-                        if (
-                            pvMatch != null
-                        ) {
+                        if (score != null) {
 
-                            val move =
-                                pvMatch
-                                    .groupValues[1]
+                            val type =
+                                score.groupValues[1]
 
-                            moves[multiPv] =
-                                move
+                            val value =
+                                score.groupValues[2]
+                                    .toIntOrNull()
+
+                            if (value != null) {
+
+                                if (type == "cp") {
+                                    item.cp = value
+                                    item.mate = null
+                                } else {
+                                    item.mate = value
+                                    item.cp = null
+                                }
+                            }
                         }
                     }
 
@@ -345,73 +306,117 @@ class StockfishEngine(
                     callback(
                         EngineResult(
                             error =
-                                "Stockfish nie znalazł ruchu. " +
-                                "Najprawdopodobniej pozycja została źle rozpoznana."
+                                "Stockfish nie znalazł ruchu."
                         )
                     )
 
                     return@execute
                 }
 
-                /*
-                 * Jeżeli MultiPV nie zwróciło żadnego PV,
-                 * przynajmniej pokaż bestmove.
-                 */
-                if (
-                    moves.isEmpty()
-                ) {
+                val lines =
+                    resultLines
+                        .toSortedMap()
+                        .mapNotNull {
+                                entry ->
 
-                    moves[1] =
-                        bestMove
-                }
+                            val rank =
+                                entry.key
 
-                if (!gotScore) {
+                            val item =
+                                entry.value
 
-                    callback(
-                        EngineResult(
-                            evaluation = "?",
-                            moves =
-                                moves
-                                    .toSortedMap()
-                                    .values
-                                    .toList(),
+                            if (
+                                item.move.isBlank()
+                            ) {
+                                null
 
-                            error =
-                                "Stockfish znalazł ruch $bestMove, " +
-                                "ale nie zwrócił oceny. Ostatnia odpowiedź: $diagnostic"
+                            } else {
+
+                                val display =
+                                    when {
+
+                                        item.mate != null -> {
+
+                                            val mate =
+                                                item.mate!!
+
+                                            if (mate >= 0) {
+                                                "M$mate"
+                                            } else {
+                                                "-M${-mate}"
+                                            }
+                                        }
+
+                                        item.cp != null -> {
+
+                                            String.format(
+                                                Locale.US,
+                                                "%.2f",
+                                                item.cp!! / 100.0
+                                            )
+                                        }
+
+                                        else ->
+                                            "?"
+                                    }
+
+                                EngineLine(
+                                    rank = rank,
+                                    move = item.move,
+                                    evaluation = display,
+                                    centipawns = item.cp,
+                                    mate = item.mate
+                                )
+                            }
+                        }
+                        .take(5)
+
+                val finalLines =
+                    if (lines.isEmpty()) {
+
+                        listOf(
+                            EngineLine(
+                                rank = 1,
+                                move = bestMove,
+                                evaluation = "?",
+                                centipawns = null,
+                                mate = null
+                            )
                         )
-                    )
 
-                    return@execute
-                }
+                    } else {
+
+                        lines
+                    }
 
                 callback(
                     EngineResult(
                         evaluation =
-                            evaluation,
+                            finalLines.first()
+                                .evaluation,
 
                         moves =
-                            moves
-                                .toSortedMap()
-                                .values
-                                .distinct()
-                                .take(5)
-                                .toList()
+                            finalLines.map {
+                                it.move
+                            },
+
+                        lines =
+                            finalLines
                     )
                 )
 
             } catch (
-                e: Exception
+                error: Exception
             ) {
 
                 callback(
                     EngineResult(
                         error =
-                            "Błąd Stockfisha: " +
-                            (
-                                e.message
-                                    ?: e.javaClass.simpleName
-                            )
+                            "Stockfish: " +
+                                (
+                                    error.message
+                                        ?: error.javaClass.simpleName
+                                )
                     )
                 )
             }
@@ -435,9 +440,3 @@ class StockfishEngine(
         executor.shutdownNow()
     }
 }
-
-data class EngineResult(
-    val evaluation: String = "?",
-    val moves: List<String> = emptyList(),
-    val error: String? = null
-)
