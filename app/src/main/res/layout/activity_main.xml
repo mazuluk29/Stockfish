@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Stockfish Overlay"
+        android:textSize="26sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Overlay wyłączony" />
+
+    <Button
+        android:id="@+id/grantOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="Zezwól na nakładkę" />
+
+    <Button
+        android:id="@+id/startOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Uruchom overlay" />
+
+    <Button
+        android:id="@+id/stopOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Zatrzymaj overlay" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:text="W tej wersji pozycję podajesz przez FEN. Automatyczne rozpoznawanie planszy ze zrzutu ekranu dołożymy w kolejnym kroku." />
+
+</LinearLayout>
