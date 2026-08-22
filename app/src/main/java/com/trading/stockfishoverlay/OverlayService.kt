@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -21,58 +23,115 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.atomic.AtomicBoolean
 
 class OverlayService : Service() {
 
     companion object {
-        const val ACTION_START_LIVE = "START_LIVE"
-        const val EXTRA_RESULT_CODE = "resultCode"
-        const val EXTRA_RESULT_DATA = "resultData"
+
+        const val ACTION_START_LIVE =
+            "START_LIVE"
+
+        const val EXTRA_RESULT_CODE =
+            "resultCode"
+
+        const val EXTRA_RESULT_DATA =
+            "resultData"
+
+        private const val FRAME_INTERVAL =
+            650L
     }
 
-    private lateinit var windowManager: WindowManager
-    private lateinit var engine: StockfishEngine
+    private lateinit var windowManager:
+        WindowManager
 
-    private var projection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
+    private lateinit var engine:
+        StockfishEngine
 
-    private var captureThread: HandlerThread? = null
-    private var captureHandler: Handler? = null
+    private val tracker =
+        BoardTracker()
 
-    private var overlayView: LinearLayout? = null
-    private var statusText: TextView? = null
-    private var stockfishText: TextView? = null
+    private val position =
+        ChessPosition()
 
-    private var frameCount = 0L
-    private var lastStatusUpdate = 0L
+    private var projection:
+        MediaProjection? = null
+
+    private var virtualDisplay:
+        VirtualDisplay? = null
+
+    private var imageReader:
+        ImageReader? = null
+
+    private var captureThread:
+        HandlerThread? = null
+
+    private var captureHandler:
+        Handler? = null
+
+    private var infoOverlay:
+        LinearLayout? = null
+
+    private var boardOverlay:
+        BoardOverlayView? = null
+
+    private var statusText:
+        TextView? = null
+
+    private var analysisText:
+        TextView? = null
+
+    private var lastFrameTime =
+        0L
+
+    private var lastMoveTime =
+        0L
+
+    private val analysing =
+        AtomicBoolean(false)
 
     private val projectionCallback =
-        object : MediaProjection.Callback() {
+        object :
+            MediaProjection.Callback() {
+
             override fun onStop() {
-                status("LIVE • udostępnianie zatrzymane")
-                clearCapture(false)
+
+                status(
+                    "LIVE • przechwytywanie zatrzymane"
+                )
+
+                releaseCapture(
+                    false
+                )
             }
         }
 
     override fun onCreate() {
+
         super.onCreate()
 
         windowManager =
-            getSystemService(WINDOW_SERVICE) as WindowManager
+            getSystemService(
+                WINDOW_SERVICE
+            ) as WindowManager
 
-        engine = StockfishEngine(this)
+        engine =
+            StockfishEngine(this)
 
         captureThread =
-            HandlerThread("StockfishCapture").apply {
+            HandlerThread(
+                "StockfishCapture"
+            ).apply {
                 start()
             }
 
         captureHandler =
-            Handler(captureThread!!.looper)
+            Handler(
+                captureThread!!.looper
+            )
 
         createChannel()
-        createOverlay()
+        createInfoOverlay()
     }
 
     override fun onStartCommand(
@@ -81,13 +140,14 @@ class OverlayService : Service() {
         startId: Int
     ): Int {
 
-        startForegroundNotification()
+        startNotification()
 
-        if (intent?.action != ACTION_START_LIVE) {
+        if (
+            intent?.action !=
+            ACTION_START_LIVE
+        ) {
             return START_NOT_STICKY
         }
-
-        status("LIVE • zgoda przekazana")
 
         val resultCode =
             intent.getIntExtra(
@@ -96,23 +156,35 @@ class OverlayService : Service() {
             )
 
         val resultData =
-            if (Build.VERSION.SDK_INT >= 33) {
+            if (
+                Build.VERSION.SDK_INT >=
+                33
+            ) {
+
                 intent.getParcelableExtra(
                     EXTRA_RESULT_DATA,
                     Intent::class.java
                 )
+
             } else {
+
                 @Suppress("DEPRECATION")
-                intent.getParcelableExtra<Intent>(
-                    EXTRA_RESULT_DATA
-                )
+                intent
+                    .getParcelableExtra<Intent>(
+                        EXTRA_RESULT_DATA
+                    )
             }
 
         if (
-            resultCode != Activity.RESULT_OK ||
+            resultCode !=
+            Activity.RESULT_OK ||
             resultData == null
         ) {
-            status("LIVE • brak zgody na ekran")
+
+            status(
+                "LIVE • brak zgody"
+            )
+
             return START_NOT_STICKY
         }
 
@@ -124,7 +196,7 @@ class OverlayService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundNotification() {
+    private fun startNotification() {
 
         val notification =
             NotificationCompat.Builder(
@@ -132,20 +204,31 @@ class OverlayService : Service() {
                 "stockfish_live"
             )
                 .setSmallIcon(
-                    android.R.drawable.ic_menu_search
+                    android.R.drawable
+                        .ic_menu_search
                 )
-                .setContentTitle("Stockfish Overlay")
-                .setContentText("Analiza ekranu aktywna")
+                .setContentTitle(
+                    "Stockfish Overlay"
+                )
+                .setContentText(
+                    "Analiza Game Review"
+                )
                 .setOngoing(true)
                 .build()
 
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (
+            Build.VERSION.SDK_INT >= 29
+        ) {
+
             startForeground(
                 100,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                ServiceInfo
+                    .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
+
         } else {
+
             startForeground(
                 100,
                 notification
@@ -158,75 +241,96 @@ class OverlayService : Service() {
         data: Intent
     ) {
 
-        clearCapture(true)
+        releaseCapture(true)
 
-        status("LIVE • tworzę MediaProjection")
+        tracker.reset()
+        position.reset()
 
-        val projectionManager =
+        status(
+            "LIVE • uruchamianie..."
+        )
+
+        val manager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
         val newProjection =
-            projectionManager.getMediaProjection(
+            manager.getMediaProjection(
                 resultCode,
                 data
             )
 
         if (newProjection == null) {
-            status("LIVE • MediaProjection ERROR")
+
+            status(
+                "LIVE • MediaProjection ERROR"
+            )
+
             return
         }
 
-        projection = newProjection
+        projection =
+            newProjection
 
-        newProjection.registerCallback(
-            projectionCallback,
-            captureHandler
-        )
+        newProjection
+            .registerCallback(
+                projectionCallback,
+                captureHandler
+            )
 
-        status("LIVE • MediaProjection OK")
-
-        val metrics = DisplayMetrics()
+        val metrics =
+            DisplayMetrics()
 
         @Suppress("DEPRECATION")
-        windowManager.defaultDisplay
-            .getRealMetrics(metrics)
+        windowManager
+            .defaultDisplay
+            .getRealMetrics(
+                metrics
+            )
 
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
+        val width =
+            metrics.widthPixels
+
+        val height =
+            metrics.heightPixels
+
+        val density =
+            metrics.densityDpi
 
         val reader =
             ImageReader.newInstance(
                 width,
                 height,
-                android.graphics.PixelFormat.RGBA_8888,
+                PixelFormat.RGBA_8888,
                 2
             )
 
-        imageReader = reader
+        imageReader =
+            reader
 
-        val display =
-            newProjection.createVirtualDisplay(
-                "StockfishCapture",
-                width,
-                height,
-                density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null,
-                captureHandler
+        virtualDisplay =
+            newProjection
+                .createVirtualDisplay(
+                    "StockfishCapture",
+                    width,
+                    height,
+                    density,
+                    DisplayManager
+                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    reader.surface,
+                    null,
+                    captureHandler
+                )
+
+        if (virtualDisplay == null) {
+
+            status(
+                "LIVE • VirtualDisplay ERROR"
             )
 
-        if (display == null) {
-            status("LIVE • VirtualDisplay ERROR")
             return
         }
-
-        virtualDisplay = display
-
-        status("LIVE • VirtualDisplay OK")
 
         reader.setOnImageAvailableListener(
             { source ->
@@ -235,93 +339,515 @@ class OverlayService : Service() {
                     source.acquireLatestImage()
                         ?: return@setOnImageAvailableListener
 
+                val now =
+                    System.currentTimeMillis()
+
+                if (
+                    now - lastFrameTime <
+                    FRAME_INTERVAL
+                ) {
+
+                    image.close()
+
+                    return@setOnImageAvailableListener
+                }
+
+                lastFrameTime =
+                    now
+
                 try {
-                    frameCount++
 
-                    val now =
-                        System.currentTimeMillis()
+                    val plane =
+                        image.planes[0]
 
-                    if (now - lastStatusUpdate >= 1000L) {
-                        lastStatusUpdate = now
+                    val buffer =
+                        plane.buffer
 
-                        status(
-                            "LIVE • klatki OK: $frameCount"
+                    val pixelStride =
+                        plane.pixelStride
+
+                    val rowStride =
+                        plane.rowStride
+
+                    val rowPadding =
+                        rowStride -
+                            pixelStride *
+                            width
+
+                    val bitmapWidth =
+                        width +
+                            rowPadding /
+                            pixelStride
+
+                    val padded =
+                        Bitmap.createBitmap(
+                            bitmapWidth,
+                            height,
+                            Bitmap.Config.ARGB_8888
                         )
-                    }
+
+                    padded
+                        .copyPixelsFromBuffer(
+                            buffer
+                        )
+
+                    val screen =
+                        Bitmap.createBitmap(
+                            padded,
+                            0,
+                            0,
+                            width,
+                            height
+                        )
+
+                    padded.recycle()
+
+                    processFrame(
+                        screen
+                    )
+
+                } catch (
+                    error: Exception
+                ) {
+
+                    status(
+                        "LIVE • ${error.message}"
+                    )
+
                 } finally {
+
                     image.close()
                 }
             },
             captureHandler
         )
+
+        status(
+            "LIVE • szukam planszy..."
+        )
+
+        analysePosition()
     }
 
-    private fun createOverlay() {
+    private fun processFrame(
+        bitmap: Bitmap
+    ) {
 
-        val root =
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
+        try {
 
-                setPadding(
-                    18,
-                    12,
-                    18,
-                    12
+            val changed =
+                tracker.process(
+                    bitmap
                 )
 
-                setBackgroundColor(
-                    0xCC181818.toInt()
+            val area =
+                tracker.boardArea()
+
+            if (area != null) {
+
+                showBoardOverlay(
+                    area
+                )
+
+                status(
+                    "LIVE • plansza OK"
                 )
             }
 
-        statusText =
-            TextView(this).apply {
-                text = "LIVE • oczekiwanie"
-                textSize = 16f
-                setTextColor(0xFFFFFFFF.toInt())
+            if (
+                changed == null ||
+                changed.size < 2
+            ) {
+                return
             }
 
-        stockfishText =
-            TextView(this).apply {
-                text =
-                    if (engine.isAvailable()) {
-                        "Stockfish gotowy"
-                    } else {
-                        "Brak Stockfisha"
+            val now =
+                System.currentTimeMillis()
+
+            if (
+                now - lastMoveTime <
+                900L
+            ) {
+                return
+            }
+
+            val move =
+                inferMove(
+                    changed
+                ) ?: return
+
+            if (
+                position.applyMove(
+                    move
+                )
+            ) {
+
+                lastMoveTime =
+                    now
+
+                status(
+                    "LIVE • ruch $move"
+                )
+
+                analysePosition()
+            }
+
+        } finally {
+
+            bitmap.recycle()
+        }
+    }
+
+    private fun inferMove(
+        changed:
+            List<BoardTracker.ChangedSquare>
+    ): String? {
+
+        val sources =
+            changed.filter {
+                position
+                    .isOwnPiece(
+                        it.square
+                    )
+            }
+
+        if (sources.isEmpty())
+            return null
+
+        data class Candidate(
+            val move: String,
+            val score: Double
+        )
+
+        val candidates =
+            mutableListOf<Candidate>()
+
+        for (source in sources) {
+
+            for (destination in changed) {
+
+                if (
+                    source.square ==
+                    destination.square
+                ) {
+                    continue
+                }
+
+                if (
+                    !position.isPseudoLegal(
+                        source.square,
+                        destination.square
+                    )
+                ) {
+                    continue
+                }
+
+                var move =
+                    source.square +
+                        destination.square
+
+                val piece =
+                    position.pieceAt(
+                        source.square
+                    )
+
+                if (
+                    piece.uppercaseChar()
+                        == 'P' &&
+                    (
+                        destination.square[1]
+                            == '1' ||
+                        destination.square[1]
+                            == '8'
+                    )
+                ) {
+                    move += "q"
+                }
+
+                candidates +=
+                    Candidate(
+                        move,
+                        source.difference +
+                            destination.difference
+                    )
+            }
+        }
+
+        return candidates
+            .maxByOrNull {
+                it.score
+            }
+            ?.move
+    }
+
+    private fun analysePosition() {
+
+        if (
+            analysing.getAndSet(
+                true
+            )
+        ) {
+            return
+        }
+
+        val fen =
+            position.toFen()
+
+        engine.analyzeFen(
+            fen,
+            13
+        ) { result ->
+
+            analysing.set(false)
+
+            analysisText?.post {
+
+                if (
+                    result.error != null
+                ) {
+
+                    analysisText?.text =
+                        result.error
+
+                    return@post
+                }
+
+                analysisText?.text =
+                    buildString {
+
+                        append(
+                            "Ocena: ${result.evaluation}\n"
+                        )
+
+                        result.moves
+                            .take(5)
+                            .forEachIndexed {
+                                    index,
+                                    move ->
+
+                                append(
+                                    "${index + 1}. $move"
+                                )
+
+                                if (
+                                    index < 4
+                                ) {
+                                    append("\n")
+                                }
+                            }
                     }
 
-                textSize = 14f
-                setTextColor(0xFFFFFFFF.toInt())
-            }
+                var evaluation =
+                    result.evaluation
+                        .toDoubleOrNull()
 
-        root.addView(statusText)
-        root.addView(stockfishText)
+                if (
+                    evaluation != null &&
+                    !position.whiteToMove
+                ) {
+                    evaluation =
+                        -evaluation
+                }
 
-        val overlayType =
-            if (Build.VERSION.SDK_INT >= 26) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
+                boardOverlay?.update(
+                    evaluation,
+                    result.moves
+                )
             }
+        }
+    }
+
+    private fun showBoardOverlay(
+        area:
+            BoardTracker.BoardArea
+    ) {
+
+        val existing =
+            boardOverlay
+
+        if (existing == null) {
+
+            val view =
+                BoardOverlayView(
+                    this
+                )
+
+            view.whiteAtBottom =
+                tracker.whiteAtBottom
+
+            val params =
+                WindowManager.LayoutParams(
+                    area.size,
+                    area.size,
+                    WindowManager
+                        .LayoutParams
+                        .TYPE_APPLICATION_OVERLAY,
+
+                    WindowManager
+                        .LayoutParams
+                        .FLAG_NOT_FOCUSABLE or
+                        WindowManager
+                            .LayoutParams
+                            .FLAG_NOT_TOUCHABLE,
+
+                    PixelFormat.TRANSLUCENT
+                )
+
+            params.gravity =
+                Gravity.TOP or
+                    Gravity.START
+
+            params.x =
+                area.left
+
+            params.y =
+                area.top
+
+            boardOverlay =
+                view
+
+            windowManager.addView(
+                view,
+                params
+            )
+
+        } else {
+
+            val params =
+                existing.layoutParams
+                    as? WindowManager
+                        .LayoutParams
+                    ?: return
+
+            if (
+                params.x != area.left ||
+                params.y != area.top ||
+                params.width != area.size ||
+                params.height != area.size
+            ) {
+
+                params.x =
+                    area.left
+
+                params.y =
+                    area.top
+
+                params.width =
+                    area.size
+
+                params.height =
+                    area.size
+
+                runCatching {
+
+                    windowManager
+                        .updateViewLayout(
+                            existing,
+                            params
+                        )
+                }
+            }
+        }
+    }
+
+    private fun createInfoOverlay() {
+
+        val root =
+            LinearLayout(this)
+                .apply {
+
+                    orientation =
+                        LinearLayout.VERTICAL
+
+                    setPadding(
+                        14,
+                        8,
+                        14,
+                        8
+                    )
+
+                    setBackgroundColor(
+                        0xB8181818.toInt()
+                    )
+                }
+
+        statusText =
+            TextView(this)
+                .apply {
+
+                    text =
+                        "LIVE • oczekiwanie"
+
+                    textSize =
+                        14f
+
+                    setTextColor(
+                        0xFFFFFFFF.toInt()
+                    )
+                }
+
+        analysisText =
+            TextView(this)
+                .apply {
+
+                    text =
+                        if (
+                            engine.isAvailable()
+                        ) {
+                            "Stockfish gotowy"
+                        } else {
+                            "Brak Stockfisha"
+                        }
+
+                    textSize =
+                        13f
+
+                    setTextColor(
+                        0xFFFFFFFF.toInt()
+                    )
+                }
+
+        root.addView(
+            statusText
+        )
+
+        root.addView(
+            analysisText
+        )
 
         val params =
             WindowManager.LayoutParams(
-                470,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                overlayType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                android.graphics.PixelFormat.TRANSLUCENT
+                360,
+                WindowManager
+                    .LayoutParams
+                    .WRAP_CONTENT,
+
+                WindowManager
+                    .LayoutParams
+                    .TYPE_APPLICATION_OVERLAY,
+
+                WindowManager
+                    .LayoutParams
+                    .FLAG_NOT_FOCUSABLE or
+                    WindowManager
+                        .LayoutParams
+                        .FLAG_NOT_TOUCHABLE,
+
+                PixelFormat.TRANSLUCENT
             )
 
         params.gravity =
-            Gravity.TOP or Gravity.START
+            Gravity.TOP or
+                Gravity.START
 
-        params.x = 20
-        params.y = 80
+        params.x =
+            22
 
-        overlayView = root
+        params.y =
+            80
+
+        infoOverlay =
+            root
 
         windowManager.addView(
             root,
@@ -329,9 +855,22 @@ class OverlayService : Service() {
         )
     }
 
+    private fun status(
+        text: String
+    ) {
+
+        statusText?.post {
+            statusText?.text =
+                text
+        }
+    }
+
     private fun createChannel() {
 
-        if (Build.VERSION.SDK_INT < 26) {
+        if (
+            Build.VERSION.SDK_INT <
+            Build.VERSION_CODES.O
+        ) {
             return
         }
 
@@ -339,7 +878,8 @@ class OverlayService : Service() {
             NotificationChannel(
                 "stockfish_live",
                 "Stockfish LIVE",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager
+                    .IMPORTANCE_LOW
             )
 
         val manager =
@@ -347,54 +887,60 @@ class OverlayService : Service() {
                 NotificationManager::class.java
             )
 
-        manager.createNotificationChannel(
-            channel
-        )
+        manager
+            .createNotificationChannel(
+                channel
+            )
     }
 
-    private fun status(text: String) {
-        statusText?.post {
-            statusText?.text = text
-        }
-    }
-
-    private fun clearCapture(
+    private fun releaseCapture(
         stopProjection: Boolean
     ) {
 
         runCatching {
-            imageReader?.setOnImageAvailableListener(
-                null,
-                null
-            )
+
+            imageReader
+                ?.setOnImageAvailableListener(
+                    null,
+                    null
+                )
         }
 
         runCatching {
             imageReader?.close()
         }
 
-        imageReader = null
+        imageReader =
+            null
 
         runCatching {
             virtualDisplay?.release()
         }
 
-        virtualDisplay = null
+        virtualDisplay =
+            null
 
-        val oldProjection = projection
-        projection = null
+        val old =
+            projection
 
-        if (oldProjection != null) {
+        projection =
+            null
+
+        if (old != null) {
 
             runCatching {
-                oldProjection.unregisterCallback(
+
+                old.unregisterCallback(
                     projectionCallback
                 )
             }
 
-            if (stopProjection) {
+            if (
+                stopProjection
+            ) {
+
                 runCatching {
-                    oldProjection.stop()
+                    old.stop()
                 }
             }
         }
@@ -402,23 +948,36 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
 
-        clearCapture(true)
+        releaseCapture(true)
 
-        runCatching {
-            engine.shutdown()
-        }
+        engine.shutdown()
 
-        overlayView?.let { view ->
+        infoOverlay?.let {
+
             runCatching {
-                windowManager.removeView(view)
+
+                windowManager
+                    .removeView(it)
             }
         }
 
-        overlayView = null
+        boardOverlay?.let {
 
-        captureThread?.quitSafely()
-        captureThread = null
-        captureHandler = null
+            runCatching {
+
+                windowManager
+                    .removeView(it)
+            }
+        }
+
+        captureThread
+            ?.quitSafely()
+
+        captureThread =
+            null
+
+        captureHandler =
+            null
 
         super.onDestroy()
     }
@@ -426,6 +985,7 @@ class OverlayService : Service() {
     override fun onBind(
         intent: Intent?
     ): IBinder? {
+
         return null
     }
 }
