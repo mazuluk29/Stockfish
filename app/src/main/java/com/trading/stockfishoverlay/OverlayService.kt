@@ -33,7 +33,6 @@ class OverlayService : Service() {
         const val ACTION_START_LIVE = "START_LIVE"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
-
         private const val FRAME_INTERVAL = 1200L
     }
 
@@ -41,41 +40,31 @@ class OverlayService : Service() {
     private lateinit var engine: StockfishEngine
 
     private val recognizer = BoardRecognizer()
-
-    private val mainHandler =
-        Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val analysing = AtomicBoolean(false)
 
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
 
     private var infoOverlay: LinearLayout? = null
     private var boardOverlay: BoardOverlayView? = null
-
     private var statusText: TextView? = null
     private var analysisText: TextView? = null
     private var sideButton: Button? = null
 
     private var lastFrameTime = 0L
     private var lastPlacement: String? = null
-
     private var whiteToMove = true
-    private var currentWhiteAtBottom = true
 
-    private val analysing =
-        AtomicBoolean(false)
-
-    private val projectionCallback =
-        object : MediaProjection.Callback() {
-
-            override fun onStop() {
-                status("LIVE • przechwytywanie zatrzymane")
-                releaseCapture(false)
-            }
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            status("LIVE • przechwytywanie zatrzymane")
+            releaseCapture(false)
         }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -83,8 +72,7 @@ class OverlayService : Service() {
         windowManager =
             getSystemService(WINDOW_SERVICE) as WindowManager
 
-        engine =
-            StockfishEngine(this)
+        engine = StockfishEngine(this)
 
         captureThread =
             HandlerThread("StockfishCapture").apply {
@@ -118,11 +106,14 @@ class OverlayService : Service() {
 
         val resultData: Intent? =
             if (Build.VERSION.SDK_INT >= 33) {
+
                 intent.getParcelableExtra(
                     EXTRA_RESULT_DATA,
                     Intent::class.java
                 )
+
             } else {
+
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra(
                     EXTRA_RESULT_DATA
@@ -133,7 +124,9 @@ class OverlayService : Service() {
             resultCode != Activity.RESULT_OK ||
             resultData == null
         ) {
+
             status("LIVE • brak zgody na ekran")
+
             return START_NOT_STICKY
         }
 
@@ -159,18 +152,21 @@ class OverlayService : Service() {
                     "Stockfish Overlay"
                 )
                 .setContentText(
-                    "Analiza planszy aktywna"
+                    "Analiza treningowa aktywna"
                 )
                 .setOngoing(true)
                 .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
+
             startForeground(
                 100,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
+
         } else {
+
             startForeground(
                 100,
                 notification
@@ -189,6 +185,7 @@ class OverlayService : Service() {
         lastFrameTime = 0L
 
         mainHandler.post {
+
             analysisText?.text =
                 "Czekam na planszę..."
 
@@ -211,7 +208,11 @@ class OverlayService : Service() {
             )
 
         if (newProjection == null) {
-            status("LIVE • MediaProjection ERROR")
+
+            status(
+                "LIVE • MediaProjection ERROR"
+            )
+
             return
         }
 
@@ -255,14 +256,19 @@ class OverlayService : Service() {
                 width,
                 height,
                 density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                DisplayManager
+                    .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface,
                 null,
                 captureHandler
             )
 
         if (virtualDisplay == null) {
-            status("LIVE • VirtualDisplay ERROR")
+
+            status(
+                "LIVE • VirtualDisplay ERROR"
+            )
+
             return
         }
 
@@ -284,13 +290,16 @@ class OverlayService : Service() {
                     now - lastFrameTime <
                     FRAME_INTERVAL
                 ) {
+
                     image.close()
+
                     return@setOnImageAvailableListener
                 }
 
                 lastFrameTime = now
 
                 try {
+
                     val plane =
                         image.planes[0]
 
@@ -305,12 +314,12 @@ class OverlayService : Service() {
 
                     val rowPadding =
                         rowStride -
-                            pixelStride * width
+                        pixelStride * width
 
                     val bitmapWidth =
                         width +
-                            rowPadding /
-                            pixelStride
+                        rowPadding /
+                        pixelStride
 
                     val padded =
                         Bitmap.createBitmap(
@@ -334,19 +343,24 @@ class OverlayService : Service() {
 
                     padded.recycle()
 
-                    processFrame(screen)
+                    processFrame(
+                        screen
+                    )
 
-                } catch (error: Throwable) {
+                } catch (
+                    error: Throwable
+                ) {
 
                     status(
                         "LIVE • ERROR: " +
-                            (
-                                error.message
-                                    ?: error.javaClass.simpleName
-                            )
+                        (
+                            error.message
+                                ?: error.javaClass.simpleName
+                        )
                     )
 
                 } finally {
+
                     image.close()
                 }
             },
@@ -359,8 +373,11 @@ class OverlayService : Service() {
     ) {
 
         try {
+
             val result =
-                recognizer.recognize(bitmap)
+                recognizer.recognize(
+                    bitmap
+                )
 
             if (result == null) {
 
@@ -371,6 +388,7 @@ class OverlayService : Service() {
                 lastPlacement = null
 
                 mainHandler.post {
+
                     analysisText?.text =
                         "Czekam na planszę..."
 
@@ -385,19 +403,23 @@ class OverlayService : Service() {
                     result.boardFen
                 )
             ) {
+
                 status(
                     "LIVE • plansza znaleziona, rozpoznaję figury..."
                 )
+
                 return
             }
 
-            currentWhiteAtBottom =
-                result.whiteAtBottom
-
             status(
-                if (result.whiteAtBottom) {
+                if (
+                    result.whiteAtBottom
+                ) {
+
                     "LIVE • plansza OK • białe na dole"
+
                 } else {
+
                     "LIVE • plansza OK • czarne na dole"
                 }
             )
@@ -414,10 +436,14 @@ class OverlayService : Service() {
                 previous ==
                 result.boardFen
             ) {
+
                 return
             }
 
-            if (previous != null) {
+            if (
+                previous != null
+            ) {
+
                 whiteToMove =
                     !whiteToMove
 
@@ -433,7 +459,10 @@ class OverlayService : Service() {
 
         } finally {
 
-            if (!bitmap.isRecycled) {
+            if (
+                !bitmap.isRecycled
+            ) {
+
                 bitmap.recycle()
             }
         }
@@ -446,21 +475,19 @@ class OverlayService : Service() {
         if (
             analysing.getAndSet(true)
         ) {
+
             return
         }
 
-        val fen =
-            buildString {
-                append(placement)
-
-                if (whiteToMove) {
-                    append(" w ")
-                } else {
-                    append(" b ")
-                }
-
-                append("- - 0 1")
+        val side =
+            if (whiteToMove) {
+                "w"
+            } else {
+                "b"
             }
+
+        val fen =
+            "$placement $side - - 0 1"
 
         status(
             "LIVE • analizuję..."
@@ -475,9 +502,13 @@ class OverlayService : Service() {
 
             mainHandler.post {
 
-                if (result.error != null) {
+                if (
+                    result.error != null
+                ) {
+
                     analysisText?.text =
                         result.error
+
                     return@post
                 }
 
@@ -485,9 +516,14 @@ class OverlayService : Service() {
                     buildString {
 
                         append(
-                            if (whiteToMove) {
+                            if (
+                                whiteToMove
+                            ) {
+
                                 "Ruch: BIAŁE\n"
+
                             } else {
+
                                 "Ruch: CZARNE\n"
                             }
                         )
@@ -498,13 +534,18 @@ class OverlayService : Service() {
 
                         result.moves
                             .take(5)
-                            .forEachIndexed { index, move ->
+                            .forEachIndexed {
+                                index,
+                                move ->
 
                                 append(
                                     "${index + 1}. $move"
                                 )
 
-                                if (index < 4) {
+                                if (
+                                    index < 4
+                                ) {
+
                                     append("\n")
                                 }
                             }
@@ -518,6 +559,7 @@ class OverlayService : Service() {
                     evaluation != null &&
                     !whiteToMove
                 ) {
+
                     evaluation =
                         -evaluation
                 }
@@ -541,69 +583,87 @@ class OverlayService : Service() {
         val rows =
             placement.split("/")
 
-        if (rows.size != 8) {
+        if (
+            rows.size != 8
+        ) {
+
             return false
         }
 
         var whiteKing = 0
         var blackKing = 0
-        var pieceCount = 0
+        var pieces = 0
 
-        for (row in rows) {
+        for (
+            row in rows
+        ) {
 
             var squares = 0
 
-            for (char in row) {
+            for (
+                char in row
+            ) {
 
-                if (char.isDigit()) {
+                if (
+                    char.isDigit()
+                ) {
+
                     squares +=
                         char.digitToInt()
-                } else {
-                    squares++
 
-                    when (char) {
-                        'K' -> {
-                            whiteKing++
-                            pieceCount++
-                        }
+                    continue
+                }
 
-                        'k' -> {
-                            blackKing++
-                            pieceCount++
-                        }
+                squares++
 
-                        'Q', 'R', 'B', 'N', 'P',
-                        'q', 'r', 'b', 'n', 'p' -> {
-                            pieceCount++
-                        }
+                when (
+                    char
+                ) {
 
-                        else -> {
-                            return false
-                        }
+                    'K' -> {
+
+                        whiteKing++
+                        pieces++
                     }
+
+                    'k' -> {
+
+                        blackKing++
+                        pieces++
+                    }
+
+                    'Q',
+                    'R',
+                    'B',
+                    'N',
+                    'P',
+                    'q',
+                    'r',
+                    'b',
+                    'n',
+                    'p' -> {
+
+                        pieces++
+                    }
+
+                    else ->
+                        return false
                 }
             }
 
-            if (squares != 8) {
+            if (
+                squares != 8
+            ) {
+
                 return false
             }
         }
 
-        if (
-            whiteKing != 1 ||
-            blackKing != 1
-        ) {
-            return false
-        }
-
-        if (
-            pieceCount < 2 ||
-            pieceCount > 32
-        ) {
-            return false
-        }
-
-        return true
+        return (
+            whiteKing == 1 &&
+            blackKing == 1 &&
+            pieces in 2..32
+        )
     }
 
     private fun showBoardOverlay(
@@ -614,13 +674,18 @@ class OverlayService : Service() {
         mainHandler.post {
 
             try {
+
                 var view =
                     boardOverlay
 
-                if (view == null) {
+                if (
+                    view == null
+                ) {
 
                     view =
-                        BoardOverlayView(this)
+                        BoardOverlayView(
+                            this
+                        )
 
                     boardOverlay =
                         view
@@ -633,7 +698,9 @@ class OverlayService : Service() {
                     view.layoutParams
                         as? WindowManager.LayoutParams
 
-                if (currentParams == null) {
+                if (
+                    currentParams == null
+                ) {
 
                     val params =
                         WindowManager.LayoutParams(
@@ -641,12 +708,13 @@ class OverlayService : Service() {
                             area.size,
                             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                             PixelFormat.TRANSLUCENT
                         )
 
                     params.gravity =
-                        Gravity.TOP or Gravity.START
+                        Gravity.TOP or
+                        Gravity.START
 
                     params.x =
                         area.left
@@ -679,14 +747,16 @@ class OverlayService : Service() {
                     )
                 }
 
-            } catch (error: Throwable) {
+            } catch (
+                error: Throwable
+            ) {
 
                 status(
                     "LIVE • OVERLAY ERROR: " +
-                        (
-                            error.message
-                                ?: error.javaClass.simpleName
-                        )
+                    (
+                        error.message
+                            ?: error.javaClass.simpleName
+                    )
                 )
             }
         }
@@ -699,7 +769,10 @@ class OverlayService : Service() {
                 ?: return
 
         runCatching {
-            windowManager.removeView(view)
+
+            windowManager.removeView(
+                view
+            )
         }
 
         boardOverlay = null
@@ -776,6 +849,7 @@ class OverlayService : Service() {
                         placement != null &&
                         !analysing.get()
                     ) {
+
                         analysePosition(
                             placement
                         )
@@ -806,12 +880,14 @@ class OverlayService : Service() {
             )
 
         params.gravity =
-            Gravity.TOP or Gravity.START
+            Gravity.TOP or
+            Gravity.START
 
         params.x = 20
         params.y = 75
 
-        infoOverlay = root
+        infoOverlay =
+            root
 
         windowManager.addView(
             root,
@@ -824,9 +900,14 @@ class OverlayService : Service() {
         mainHandler.post {
 
             sideButton?.text =
-                if (whiteToMove) {
+                if (
+                    whiteToMove
+                ) {
+
                     "RUCH: BIAŁE"
+
                 } else {
+
                     "RUCH: CZARNE"
                 }
         }
@@ -849,6 +930,7 @@ class OverlayService : Service() {
             Build.VERSION.SDK_INT <
             Build.VERSION_CODES.O
         ) {
+
             return
         }
 
@@ -861,10 +943,9 @@ class OverlayService : Service() {
 
         getSystemService(
             NotificationManager::class.java
+        ).createNotificationChannel(
+            channel
         )
-            .createNotificationChannel(
-                channel
-            )
     }
 
     private fun releaseCapture(
@@ -881,12 +962,14 @@ class OverlayService : Service() {
         }
 
         runCatching {
+
             imageReader?.close()
         }
 
         imageReader = null
 
         runCatching {
+
             virtualDisplay?.release()
         }
 
@@ -897,7 +980,9 @@ class OverlayService : Service() {
 
         projection = null
 
-        if (oldProjection != null) {
+        if (
+            oldProjection != null
+        ) {
 
             runCatching {
 
@@ -906,9 +991,12 @@ class OverlayService : Service() {
                 )
             }
 
-            if (stopProjection) {
+            if (
+                stopProjection
+            ) {
 
                 runCatching {
+
                     oldProjection.stop()
                 }
             }
@@ -920,6 +1008,7 @@ class OverlayService : Service() {
         releaseCapture(true)
 
         runCatching {
+
             engine.shutdown()
         }
 
@@ -930,15 +1019,17 @@ class OverlayService : Service() {
             infoOverlay?.let {
 
                 runCatching {
-                    windowManager.removeView(it)
+
+                    windowManager.removeView(
+                        it
+                    )
                 }
             }
 
             infoOverlay = null
         }
 
-        captureThread
-            ?.quitSafely()
+        captureThread?.quitSafely()
 
         captureThread = null
         captureHandler = null
@@ -949,6 +1040,7 @@ class OverlayService : Service() {
     override fun onBind(
         intent: Intent?
     ): IBinder? {
+
         return null
     }
 }
