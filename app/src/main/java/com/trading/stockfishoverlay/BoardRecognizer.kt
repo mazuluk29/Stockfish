@@ -1,6 +1,7 @@
 package com.trading.stockfishoverlay
 
 import android.graphics.Bitmap
+import android.util.Base64
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -19,8 +20,9 @@ class BoardRecognizer {
         val confidence: Double
     )
 
-    private var cachedArea: BoardArea? = null
-
+    /*
+     * Kolory Twojego motywu Chess.com.
+     */
     private val lightSquare =
         doubleArrayOf(
             237.0,
@@ -35,296 +37,241 @@ class BoardRecognizer {
             86.0
         )
 
-    fun reset() {
-        cachedArea = null
-    }
-
-    fun getCachedArea(): BoardArea? {
-        return cachedArea
-    }
+    /*
+     * Średnia różnica jasności potrzebna,
+     * żeby uznać pole za zajęte.
+     *
+     * Na Twoich screenach:
+     * puste pola ≈ 0-5
+     * figury ≈ 15-70+
+     */
+    private val occupiedThreshold =
+        10.0
 
     /*
-     * Szybkie sprawdzenie, czy obraz planszy
-     * się zmienił.
+     * Próg określający kolor figury.
      *
-     * Nie rozpoznaje figur.
-     * Pobiera tylko kilka próbek z każdego pola.
+     * Czarne figury mają zwykle medianę
+     * około 45-60.
+     *
+     * Białe około 100-210.
      */
-    fun quickSignature(
-        bitmap: Bitmap
-    ): LongArray? {
+    private val whitePieceBrightnessThreshold =
+        95.0
 
-        val area =
-            cachedArea
-                ?: findBoard(bitmap)
-                ?: return null
+    /*
+     * Każdy wzorzec ma 20×20 = 400 wartości.
+     *
+     * Osobne wzorce białych i czarnych są używane
+     * do rozpoznania KSZTAŁTU.
+     *
+     * Kolor figury ustalamy potem niezależnie.
+     */
+    private data class PieceTemplate(
+        val piece: Char,
+        val scale: Double,
+        val encoded: String
+    )
 
-        cachedArea = area
+    private val templateDefinitions =
+        listOf(
 
-        val cell =
-            area.size / 8f
+            PieceTemplate(
+                'R',
+                721.7110998680872,
+                "/////v////////////7+/v/+/v4PDA4NDQ4ODQ4NDA4NDAwNDgwMEA8MDg4LDQ0MDgoKDgsKCgsNDQsQDwsNDunEyOXvwb/i7LKu3AsODA8PCw0N2iM1v74YHbOy09TECwwPEA8MDAvaMGY8N1NIC+v22McNCwwQEA4LC9nG/Pr38OXOuq6OxQ4MCxAQDwsKAbfF/wMA8dTBnqX6DA4MEA8ODQoLCsXS8+3fvpavBwsLDQ4QDwwOCwwO3yxpYU8e0swOCwoLDxAQCw4LDA7fKWZhUiXVzQ4LDQsOEBALDgwLDt8qaWNVKtnODgwPDQwQDwsODAsNzuMLBvveqLcLDA8ODBAPCw4MCt7ZLzApGf3WnMsKDw8MEBALDgwEsQYOCAD24b+iiP0ODgwQDwsOBefCRUM/Ni4Z9NOX4AQNDBAPDA7m1PgLCwgB+OvUwLCh0goNDxAMDeP5NTMyLSUcDfru6b/PDxAPEA4N/+Tp5+bl5eTl4eDi3fsUEhAQEA8PEBAPDw8PEBAODxAPEBEQEA=="
+            ),
 
-        val signature =
-            LongArray(64)
+            PieceTemplate(
+                'N',
+                759.3603686503277,
+                "9vb29vb29vb29vb29vb29vb29vcJBwgHBgcICAgHBggHBgYHCAYGCAkGBwjiuO3nzwAFCAYFBQUHBgUICQYGCNzRwLPIxfP+BQYFBQUHBwgJBgYG8uIR/QiRsa655QMGBQUICQkGBgXg7Uc4J/EdHOqvvP4GBQcJCggG/cku2g8nO0A8KgfAswEHBggJCQbw5e+IESk/Pjw7Jf6xzAcHCAkIBtMOKBsoPT4lOz02G+2j9ggJCQf00jkqJDpGK9E4QT0nBL7ICQoJAsQZPDM3OCjWtTI+OCQP46kECgnn0eYiMhfWuKHNNjw3IhX3o/UKCd7T5BMIvdb3ugo7PjkmF/qx6gkJ+Lbuurq+As3wNz0+OisW96/YCQgF8sOuvPbQ9DY5Ozw4KxLsq9MJCAYIBgUF4+4+NzU3ODUoCuOozwkJBwcFBQXLPD40NTk6NSQB3KjOCQgHBgUFBMweEgcFBQUC9tm+ls4JCQgGBQUI59/e3t/f3t7e2tbS+AoKCQgICQkICAgJCgkICQoJCg8PCg=="
+            ),
 
-        for (row in 0..7) {
+            PieceTemplate(
+                'B',
+                599.1827444634404,
+                "/////v7///////////7///////8NCw4MCwwMDA0GBQ0LCgoLDAoLDg0KCwwKDAwL+s7H+QoJCQkMCwoODQoKDQoLDgvoEvvhCQkJCQoMDA4OCgoLDAsNC/W0rfMJCQkKCQoODg4KCgoMCw0C1REEzwIKCg0KCQsPDgwJCgsM+9YnVEUCxvkLCgwKCg4NDQoKCgPYQFsaEzcIwwMJCgwKDg0MDAoK6hliHaCeAinn6AkJCw0ODQoNCgrjNVsgpacKLgXgCgkKDg4NCg0KCuoJU0wiHzkt5OoKCwkNDw4KDAsKBdAMJBsUDfDHBQoOCgsPDQoMCwoNALr5CwXkswEMCg0MCw8NCgwLCQz93D0mHh7J+wwKDQwLDg0KDQoJCtuIrL3Dr43cCwoNDAoODQn24N/i58iarbWfyOnh3N/1CA4N+8saFv7t9BvX0wvi3+4D/rj3Dg0I0ODW0+sF6czL3/nm1NbWwwcODQ376/z15uLsBgfw4eb1/e3/Dw8ODg4NDg4ODg4ODg4NDQ4ODg8PDg=="
+            ),
 
-            for (col in 0..7) {
+            PieceTemplate(
+                'Q',
+                927.5746482680175,
+                "EBMUExMTExITExMTExMTExMUFBMrLy8vLy8vLy8rKS8uLy8vLy8vLysvLy8tC/UeId7UEib5ACwvLy8vKywZJB3jAt8C9v3o9t/QBicYKC8q9t/VE93q4R/EsA76zsoH3dPdKyrfD9gUC5n6L9u7KxSd8iTK/sokKxHIqSEfw98r3dEe8bgJLL6sAC0rLwu88Rvl3g/f6AjT0gQIs+4uLysvHdrdAvgC3Pf/2tnh+tTRCC8vKy8r3xDI9yeuCRKn/ujF8dMcLi8rLy/pIeHlMtoWHtAc4LwPzysuLysvL/v8DOzU08W9y7nF8ufdLi4vKy8uDaji8BP65tzNza6miPIvLi8rLy8n0Ovi6enYyMi5n5qhGi8uLysvLy713Pjl39K/vLKllc0uLi4vKy8vLvbxGx0XC/bt48+szC0uLS8rLy8swse2q6qnpqafn6GdHycdLisvLyvUn52mpqipp62kor4cHRwtKy8vLy0jEAP6+Pj6AQ0fLCsdHS4rLy8uLy8uLi4uLi4vLy8vLisrLw=="
+            ),
 
-                val index =
-                    row * 8 + col
+            PieceTemplate(
+                'K',
+                707.4074611352413,
+                "/Pn6+vr6+fr6+vr5+fj4+Pj4+PkA+fv6+fv7+vv49vr6+Pj6+/n4/AD4+fr3+/v5+tXJ+vj29vb6+vb8APj2+vj6/fngkYjS9vb29vb6+fwA9/b4+vn9+PS3qfD29vb29vf7/QD49vTq5Obr6drW4O3h4ej09vj9APrt3AggFfHMQTvI7AoP+9fp9vwA+OA7WVRNQwAtK/5OS0M+IdLw/ADoFFxWUElAHwAMMVdQRTsx9d38AOEtWlZQRjwu6PBOVFBFNCP91/4A4xdXUEpANCnxBVRSSjojFO3b/gDx4j1IQjcrG/UMQUM4JRQFzO3+APjp3wcH+Pby8PP08eTk483h+P0A+PrwzS5FRT40LCMXCfO77vv4/QD3+vjZBw4C/vvz5NnW0cf6+/j8APj799wsSEM5LyYbEQfuyPr6+PwA+Pr0xfjk2+Hh3t7TztGz8P/+/AD5+vTCu8rX3OLk397QwLv0DQz+APr69vb059/a3N3e3+Xx+PsKB/8B/f37/f37+/v7/f37/f38/f8A/g=="
+            ),
 
-                var totalR = 0L
-                var totalG = 0L
-                var totalB = 0L
-                var count = 0
+            PieceTemplate(
+                'P',
+                743.4593470851283,
+                "CgoKCgoKCgoKCgoKCgoKCgoKCgoKBwkHBwkJCAkIBwkIBwYHCQcICgsGCAgGCQkICQYGCgYGBgYICAcKCwYGCAcICgLXx8TL/QYGBgYJCAoLBwYHCQgJzA1bPdCuAgYGBQYKCwsHBgUICPffc146+5TnCAkHBQgLCwkFBQcJ5/xrTijroNgICAkHBgoLCgYFBwj20U8zBNaQ7AkGBgkHCgoJCAUHCQTBwvTRjKYCCQYFBwkLCggJBQYI18vpAOKljr8IBQYGCgsKBwkGBwS3KCQT8sqwiP0HCAYJDAoHCQcHB+TFv//VjLLcBgYKBwgLCwcIBwcJBckPRRPCsQUJBgoJBwsLBwkHBgjf109MKfaczAcGCQkHCwoHCQcF3dpQV0o1EOCWzAYJCQcKCgcJB/PRXWJWTD4i/NiV6QgIBwoKBwkG0ClwYFlRQScH6bu5CAgICgoICQbAHTYoIBoN++LEsZ0FBwkKCgkIBtzDw8G/v7++ubW10AYHCgsLCwoKCgsJCgoKCwsKCgsKCwoLCw=="
+            ),
 
-                val points =
-                    arrayOf(
-                        0.30f to 0.30f,
-                        0.50f to 0.50f,
-                        0.70f to 0.30f,
-                        0.30f to 0.70f,
-                        0.70f to 0.70f
-                    )
+            PieceTemplate(
+                'r',
+                1200.1991622420144,
+                "JSUlJSUlJSUlJSUlJSUlJSUlJCUwLS8uLi8vLi8uLS8uLS0uLy0tMDAuMC8sLi4tLywrLywrKywuLiwwMC8xMBTk4hAY2dQLFtTPCSwvLTAwLzAvBdjP3eGso8/alY/wLC0vMTAuLi0F3dbKvK2kmZKNjvItLC0xMS4sLAfCvreqoJiSjYuP9y8tLDAwLywsJuimoJ6alIyIk9khLC8tMTAuLiwtLPO8sqWZjYreKiwsLi4wMC0vLC0uCtzFtqaTjPQvLCwsLzEwLC8sLS4J1b+2qJWN9C4sLiwvMTAsLy0sLgjSwbenlI30LiwvLi0xMCwuLSwu+raxqJ2RjOQsLS8uLTAwLC4tLAva0sOvoJWNnPosLy8tMTAsLy0o1dLGuaiflo2JriMuLy0wMCwvKRTP1cm7q6Oaj4ijDikwLTAwLS8R1MXBuaqhm5WNiY2gBDQvMDAtLg7TzsfCtKqknpWSkpT+MTAwMC8uJAoKBwYFAwQEAgIDAyEsMDEwMC8vMDAvLy8vMDAvLzAvMC4wMQ=="
+            ),
 
-                for (
-                    point in points
-                ) {
+            PieceTemplate(
+                'n',
+                1650.4747876220222,
+                "RkVGRkZGRkZGRkVGRkZFRUVFRkdUUVNQUVFSUlJRUFNRUFBRUlFQU1RPUVExADk0G0tQUlBPT09RUU9TVE9PUii2usyzDkBLTk9PT05RUVNUT09RPtazq56dr8T0MU1PTk9TVFRQT08s6dqwoZeYk46n/klQT1FUVFFPSPHctqegpKKeloyS70xRT1NTUlA83riXpJ+noZ+blIyXFFJQU1RSUR3cqZyerK+koJ6akIm7QlJUVFBA79Wln6+9rpadnpuQiZEQUlRUTf3RtqSkramgjpqbmpKJiNZOVFQzvq2loZ6py+SYnJybkYmIsUJUVCmlmJqXsSFE65menJqSioihNlRTRNGhlJX7TgysoJ+dmpGJiJQkVFNPPQfy+UIWxaiinpyajoiIkB1UU1BTUE5OL/XEopubm5SLiIiQGlNTUFJPTk4NDb2fmJmVjYmIiJAaU1RRUU5OTgX5v6Wen5qTkI+QlyBUVFNQTk9SMyQfHB0eHBsdGx0fRlRUVFNSU1RSU1NTVFRTU1RTU09OVA=="
+            ),
 
-                    val x =
-                        (
-                            area.left +
-                                col * cell +
-                                cell *
-                                point.first
-                            ).toInt()
+            PieceTemplate(
+                'b',
+                1066.2377287786103,
+                "HBwcGxsbHBwcHBwcHBsbHBwcGxwlJCYkJCUlJCUgHyUkIyMkJSMjJiUjIyQiJSUkF9bJFSMiIiIlJCMmJSMiJSMkJiMEvJv6IiIiIiIlJCYlIyMjJSQmIxKwqBEiIiIiIiMmJiYjIyMlJCYd7buk4BwiIyUjIiQnJiQiIyQkF+rhuJ+czhUkIyUjIyYlJSMiIx3p7sigmpiUxh4iIyUjJiUkJCIjCObcqY+Rk5OZBSIiIyUmJSMlIyP+3cWhj5WUkZP3IiIjJiYlIyUjIwjFtZ+WmJORmQYjJCIlJyUjJSMjH9mpm5aUkZbTICMmIyQnJSMlIyMkG82qmpKPxBwkIyUlJCclIyQjIiQZ3Naql5OvFyQjJSUjJiUjJSMiIwCrmYyJipoAJCMlJCMmJSIU//oBCO2kiImk7Qr/9/0UJSYlGNjPta64u62fmpyqpZ2os8IeJiUi4rGzpqKoseHgppuXorOm2CcmJSUYCxkTBPwKHyEM+wMTGQsWJiYmJiUlJiYmJSUlJiYlJiYlJiUmJw=="
+            ),
 
-                    val y =
-                        (
-                            area.top +
-                                row * cell +
-                                cell *
-                                point.second
-                            ).toInt()
+            PieceTemplate(
+                'q',
+                1173.9395655375902,
+                "NzQ1NTU1NDU1NTU1NDMyNDQyMjQ9NDc1NTc2NjYyLzY1MzQ1NzQ0OT0zNDYxHQkpLfXdIS0LDy81NDI4PTAkLyjtz+4Z4r38C9S8FC0mMDg8DOLeJOa/8CzXvx4MvboW88fvNz3748EkHL8NNvHVMyC9CDDbtcszPSPgySwr0u405sssBrsbMuDBDzg9NxrLAynk1CLiyBzkuxgXwgQzOD02K9zQF/DO+OfB99K2D+TBGDY4PDQ07c3Z7c+/4rrBz67k08MmNzk8Mzb83LLSz6/Yt7XKob7M0C81OjwyNg/bt8G1qquZqqSewrPtNDQ5PDI2Hb7Cw8iypZ2Zko6VlQk2NDk8MjYv5NfJvLCgmZeSi4izKTczOTwyNjQL6+LAq6CZl5KMieY2NjQ4PDM2NAwA/eDCsqSfmZOO4zU2Nzg9MzYv6Nu5o5iSk5WVk5C3Kz5FOD00Ni/zuaKbl5eXmqWot+IwREg5PTY0MjIwHxQKBwgOEhssMzpFRzo9OTk3OTk3Nzc3OTk3ODk3OT08Og=="
+            ),
 
-                    if (
-                        x !in 0 until bitmap.width ||
-                        y !in 0 until bitmap.height
-                    ) {
-                        continue
-                    }
+            PieceTemplate(
+                'k',
+                1831.3382027997973,
+                "Oz8/Pz8/Pz4/Pz8/Pz8/P0BAQD9UWFhYWFhYWFhVVVhYWFhYWFhYWFRXV1dXV1dXViMUVVdXV1dXV1dYVFdXV1dXV1ctxbocVldXV1dXV1dUV1dXV1dXV0345UhXV1dXV1dXV1RXV1M6KixBM8auIUUvKjVQV1dXVFhH9L2il626ooqtxaCWnNc8WFhUUfrDpY6IiIqKiJuoioiIis1MWFQ227ybioiIiIiKmo6IiIiIkyFYVCXGq5KIiIiIiIuOiIiIiIiKB1hUMLeZioiIiIiIioiIiIiIiI8YWFRN1IyIiIiIiIiJiIiIiIiIuUNYVFg3yJCIiIiIiIiIiIiIjbsqV1hUWFhK4aGPiIiIiIiIiIjCQldXWFRYWFgTupyKiIiIiIiIiO5XV1dYVFhYVwzEpY2IiIiIiIiI4VVXV1hUWFhT4LSTioiIiIiIiIi1SFFSWFRYWFQAvaGXkY+PkZWete5JQ0VWVFhYWFZMOy4kISEjKzhJVVVFS1ZTWFhYWFhYV1hXWFhYWFhXWFVUWA=="
+            ),
 
-                    val pixel =
-                        bitmap.getPixel(
-                            x,
-                            y
-                        )
+            PieceTemplate(
+                'p',
+                1067.9906207380957,
+                "JCQkJCQkJCQkJCQkJCQkJCQkJCQjISIhISIiISIhICIhICAhIiAhIyMgIiIgIiIhIiAgIiAgICAhISAjIyAgIiAiIx4A4dn1GyAgICAiISMjICAgIiEi997Hq57eHiAgHyAiJCMgICAiIhfg1aealKIOISIhHyEkJCIgHyEiDtjBo5iQlgQiISIhICMkIiAfICIXzbOekoukECIgICIgIyMiISAgIh/uo5SLj94eIiAgISIjIyEiHyAiANawnpSQqe8hICAgIiQjICIgIB/g2K+fk42PthsgISAiJCMgIiAgIQvyqJqNk+YFICAjISEkIyAiISAiH/Kpn5GN4h8iICMiISQjICIhICEGu6qflYyd+SEgIiIgIyMgIiEgBc67qJyVjomf+SAiIiAjIyAiIBXZ2rmjmJOPioinDiIiISMjICIg+t7UsKCXko+KiIvnISEhIyMhIiDr1MKonJSQjoyKic0fISIjIyIhIAfv7Onn5+fo5ubn/yAgIiQkIyIiIyMiIiIiIyMiIiMiIyIjJA=="
+            )
+        )
 
-                    totalR +=
-                        (pixel shr 16) and 255
+    private data class DecodedTemplate(
+        val piece: Char,
+        val values: FloatArray
+    )
 
-                    totalG +=
-                        (pixel shr 8) and 255
+    private val templates: List<DecodedTemplate> =
+        templateDefinitions.map {
 
-                    totalB +=
-                        pixel and 255
-
-                    count++
-                }
-
-                if (
-                    count == 0
-                ) {
-                    continue
-                }
-
-                val r =
-                    totalR / count
-
-                val g =
-                    totalG / count
-
-                val b =
-                    totalB / count
-
-                signature[index] =
-                    (r shl 16) or
-                        (g shl 8) or
-                        b
-            }
+            DecodedTemplate(
+                piece = it.piece,
+                values = decodeTemplate(
+                    it.encoded,
+                    it.scale
+                )
+            )
         }
-
-        return signature
-    }
-
-    fun signatureDifference(
-        a: LongArray?,
-        b: LongArray?
-    ): Double {
-
-        if (
-            a == null ||
-            b == null ||
-            a.size != 64 ||
-            b.size != 64
-        ) {
-            return 999.0
-        }
-
-        var total =
-            0.0
-
-        for (
-            i in 0 until 64
-        ) {
-
-            val ar =
-                ((a[i] shr 16) and 255)
-                    .toDouble()
-
-            val ag =
-                ((a[i] shr 8) and 255)
-                    .toDouble()
-
-            val ab =
-                (a[i] and 255)
-                    .toDouble()
-
-            val br =
-                ((b[i] shr 16) and 255)
-                    .toDouble()
-
-            val bg =
-                ((b[i] shr 8) and 255)
-                    .toDouble()
-
-            val bb =
-                (b[i] and 255)
-                    .toDouble()
-
-            total +=
-                abs(ar - br) +
-                    abs(ag - bg) +
-                    abs(ab - bb)
-        }
-
-        return total /
-            (64.0 * 3.0)
-    }
 
     fun recognize(
         bitmap: Bitmap
     ): Result? {
 
-        var area =
-            cachedArea
+        val area =
+            findBoard(bitmap)
+                ?: return null
 
-        if (
-            area == null ||
-            !boardStillThere(
-                bitmap,
-                area
-            )
-        ) {
-
-            area =
-                findBoard(
-                    bitmap
-                )
-
-            cachedArea =
-                area
-        }
-
-        if (
-            area == null
-        ) {
-            return null
-        }
-
-        val whiteAtBottom =
-            detectOrientation(
-                bitmap,
-                area
-            )
-
-        val board =
+        /*
+         * Najpierw rozpoznajemy pola w orientacji
+         * ekranowej.
+         */
+        val screenBoard =
             Array(8) {
                 CharArray(8) {
                     '.'
                 }
             }
 
-        var confidence =
+        var confidenceSum =
             0.0
 
         var pieces =
             0
 
         for (
-            screenRow in 0..7
+            row in 0..7
         ) {
 
             for (
-                screenCol in 0..7
+                col in 0..7
             ) {
 
                 val result =
                     recognizeSquare(
                         bitmap,
                         area,
-                        screenRow,
-                        screenCol
+                        row,
+                        col
                     )
 
-                val piece =
+                screenBoard[row][col] =
                     result.first
 
                 if (
-                    piece == '.'
+                    result.first != '.'
                 ) {
-                    continue
+
+                    pieces++
+
+                    confidenceSum +=
+                        result.second
                 }
+            }
+        }
 
-                pieces++
+        /*
+         * Menu / ekran bez planszy.
+         */
+        if (
+            pieces < 2
+        ) {
 
-                confidence +=
-                    result.second
+            return null
+        }
 
-                val fenRow: Int
-                val fenCol: Int
+        val whiteAtBottom =
+            detectOrientation(
+                screenBoard
+            )
+
+        val logicalBoard =
+            Array(8) {
+                CharArray(8) {
+                    '.'
+                }
+            }
+
+        for (
+            row in 0..7
+        ) {
+
+            for (
+                col in 0..7
+            ) {
+
+                val piece =
+                    screenBoard[row][col]
 
                 if (
                     whiteAtBottom
                 ) {
 
-                    fenRow =
-                        screenRow
-
-                    fenCol =
-                        screenCol
+                    logicalBoard[row][col] =
+                        piece
 
                 } else {
 
-                    fenRow =
-                        7 - screenRow
-
-                    fenCol =
-                        7 - screenCol
+                    logicalBoard[
+                        7 - row
+                    ][
+                        7 - col
+                    ] =
+                        piece
                 }
-
-                board[
-                    fenRow
-                ][fenCol] =
-                    piece
             }
-        }
-
-        if (
-            pieces < 2
-        ) {
-            return null
         }
 
         return Result(
@@ -333,281 +280,27 @@ class BoardRecognizer {
 
             boardFen =
                 boardToFen(
-                    board
+                    logicalBoard
                 ),
 
             whiteAtBottom =
                 whiteAtBottom,
 
             confidence =
-                confidence /
-                    pieces
+                if (
+                    pieces > 0
+                ) {
+
+                    confidenceSum /
+                        pieces
+
+                } else {
+
+                    0.0
+                }
         )
     }
 
-    private fun findBoard(
-        bitmap: Bitmap
-    ): BoardArea? {
-
-        val width =
-            bitmap.width
-
-        val size =
-            width
-
-        val cell =
-            size / 8f
-
-        val startY =
-            (bitmap.height * 0.15f)
-                .toInt()
-
-        val endY =
-            bitmap.height -
-                size -
-                40
-
-        var bestTop =
-            -1
-
-        var bestScore =
-            -1.0
-
-        var y =
-            startY
-
-        /*
-         * Krok 4 px zamiast 2.
-         * Szukanie planszy wykonujemy tylko,
-         * gdy nie mamy już zapamiętanej pozycji.
-         */
-        while (
-            y <= endY
-        ) {
-
-            var normal = 0
-            var reversed = 0
-
-            for (
-                col in 0..7
-            ) {
-
-                val x =
-                    (
-                        col * cell +
-                            cell * 0.15f
-                        ).toInt()
-
-                val pixel =
-                    safePixel(
-                        bitmap,
-                        x,
-                        y + (cell * 0.15f).toInt()
-                    )
-                        ?: continue
-
-                val normalReference =
-                    if (
-                        col % 2 == 0
-                    ) {
-                        lightSquare
-                    } else {
-                        darkSquare
-                    }
-
-                val reverseReference =
-                    if (
-                        col % 2 == 0
-                    ) {
-                        darkSquare
-                    } else {
-                        lightSquare
-                    }
-
-                if (
-                    colorDistance(
-                        pixel,
-                        normalReference
-                    ) < 60.0
-                ) {
-                    normal++
-                }
-
-                if (
-                    colorDistance(
-                        pixel,
-                        reverseReference
-                    ) < 60.0
-                ) {
-                    reversed++
-                }
-            }
-
-            val score =
-                maxOf(
-                    normal,
-                    reversed
-                ).toDouble()
-
-            if (
-                score > bestScore
-            ) {
-
-                bestScore =
-                    score
-
-                bestTop =
-                    y
-            }
-
-            /*
-             * 7/8 to już bardzo mocny sygnał.
-             */
-            if (
-                score >= 7.0
-            ) {
-
-                return BoardArea(
-                    left = 0,
-                    top = y,
-                    size = size
-                )
-            }
-
-            y += 4
-        }
-
-        if (
-            bestScore >= 6.0 &&
-            bestTop >= 0
-        ) {
-
-            return BoardArea(
-                left = 0,
-                top = bestTop,
-                size = size
-            )
-        }
-
-        return null
-    }
-
-    private fun boardStillThere(
-        bitmap: Bitmap,
-        area: BoardArea
-    ): Boolean {
-
-        if (
-            area.left < 0 ||
-            area.top < 0 ||
-            area.left + area.size >
-            bitmap.width ||
-            area.top + area.size >
-            bitmap.height
-        ) {
-            return false
-        }
-
-        val cell =
-            area.size / 8f
-
-        var matches =
-            0
-
-        var checked =
-            0
-
-        /*
-         * Sprawdzamy tylko 16 pól.
-         * Jest to dużo szybsze niż ponowne
-         * szukanie całej planszy.
-         */
-        for (
-            row in 0..7 step 2
-        ) {
-
-            for (
-                col in 0..7 step 2
-            ) {
-
-                val x =
-                    (
-                        area.left +
-                            col * cell +
-                            cell * 0.12f
-                        ).toInt()
-
-                val y =
-                    (
-                        area.top +
-                            row * cell +
-                            cell * 0.12f
-                        ).toInt()
-
-                val pixel =
-                    safePixel(
-                        bitmap,
-                        x,
-                        y
-                    )
-                        ?: continue
-
-                checked++
-
-                val parity =
-                    (row + col) % 2
-
-                val first =
-                    if (
-                        parity == 0
-                    ) {
-                        lightSquare
-                    } else {
-                        darkSquare
-                    }
-
-                val second =
-                    if (
-                        parity == 0
-                    ) {
-                        darkSquare
-                    } else {
-                        lightSquare
-                    }
-
-                if (
-                    minOf(
-                        colorDistance(
-                            pixel,
-                            first
-                        ),
-                        colorDistance(
-                            pixel,
-                            second
-                        )
-                    ) < 65.0
-                ) {
-                    matches++
-                }
-            }
-        }
-
-        return (
-            checked >= 8 &&
-                matches.toDouble() /
-                checked >= 0.55
-            )
-    }
-
-    /*
-     * Klasyfikacja figur.
-     *
-     * Ta część opiera się na geometrii/kolorze
-     * figur z obecnego motywu Chess.com.
-     *
-     * Zachowujemy ją lekką, bo pełna analiza
-     * odpala się dopiero po zmianie planszy.
-     */
     private fun recognizeSquare(
         bitmap: Bitmap,
         area: BoardArea,
@@ -615,195 +308,35 @@ class BoardRecognizer {
         col: Int
     ): Pair<Char, Double> {
 
-        val cell =
-            area.size / 8f
-
-        val left =
-            (
-                area.left +
-                    col * cell +
-                    cell * 0.12f
-                ).toInt()
-
-        val top =
-            (
-                area.top +
-                    row * cell +
-                    cell * 0.06f
-                ).toInt()
-
-        val right =
-            (
-                area.left +
-                    (col + 1) * cell -
-                    cell * 0.12f
-                ).toInt()
-
-        val bottom =
-            (
-                area.top +
-                    (row + 1) * cell -
-                    cell * 0.06f
-                ).toInt()
-
-        if (
-            left < 0 ||
-            top < 0 ||
-            right >
-            bitmap.width ||
-            bottom >
-            bitmap.height ||
-            right <= left ||
-            bottom <= top
-        ) {
-
-            return Pair(
-                '.',
-                0.0
-            )
-        }
-
-        val background =
-            expectedSquareColor(
-                row,
-                col,
+        val square =
+            extractSquare(
                 bitmap,
-                area
+                area,
+                row,
+                col
             )
+                ?: return Pair(
+                    '.',
+                    0.0
+                )
 
-        var nonBackground =
-            0
-
-        var darkPixels =
-            0
-
-        var lightPixels =
-            0
-
-        var total =
-            0
-
-        var minX =
-            Int.MAX_VALUE
-
-        var maxX =
-            Int.MIN_VALUE
-
-        var minY =
-            Int.MAX_VALUE
-
-        var maxY =
-            Int.MIN_VALUE
-
-        val step =
-            maxOf(
-                2,
-                ((right - left) / 24)
+        val feature =
+            createFeature(
+                square
             )
-
-        var y =
-            top
-
-        while (
-            y < bottom
-        ) {
-
-            var x =
-                left
-
-            while (
-                x < right
-            ) {
-
-                val pixel =
-                    bitmap.getPixel(
-                        x,
-                        y
-                    )
-
-                total++
-
-                val difference =
-                    colorDistance(
-                        pixel,
-                        background
-                    )
-
-                if (
-                    difference > 35.0
-                ) {
-
-                    nonBackground++
-
-                    val brightness =
-                        pixelBrightness(
-                            pixel
-                        )
-
-                    if (
-                        brightness < 125
-                    ) {
-
-                        darkPixels++
-
-                    } else if (
-                        brightness > 170
-                    ) {
-
-                        lightPixels++
-                    }
-
-                    minX =
-                        minOf(
-                            minX,
-                            x
-                        )
-
-                    maxX =
-                        maxOf(
-                            maxX,
-                            x
-                        )
-
-                    minY =
-                        minOf(
-                            minY,
-                            y
-                        )
-
-                    maxY =
-                        maxOf(
-                            maxY,
-                            y
-                        )
-                }
-
-                x += step
-            }
-
-            y += step
-        }
-
-        if (
-            total == 0
-        ) {
-
-            return Pair(
-                '.',
-                0.0
-            )
-        }
-
-        val fill =
-            nonBackground.toDouble() /
-                total
 
         /*
-         * Puste pole.
+         * NAJWAŻNIEJSZA ZMIANA:
+         *
+         * zanim zaczniemy porównywać z figurami,
+         * ustalamy czy w ogóle jest tam figura.
          */
         if (
-            fill < 0.10
+            feature.occupancy <
+            occupiedThreshold
         ) {
+
+            square.recycle()
 
             return Pair(
                 '.',
@@ -811,198 +344,250 @@ class BoardRecognizer {
             )
         }
 
-        val whitePiece =
-            lightPixels >
-                darkPixels
+        /*
+         * Typ figury ustalamy jako maksimum
+         * spośród wzorca białego i czarnego.
+         *
+         * Dzięki temu np. biały król nie jest
+         * mylony z czarnym tylko dlatego,
+         * że stoi na innym kolorze pola.
+         */
+        val typeScores =
+            mutableMapOf<Char, Double>()
 
-        val pieceHeight =
-            if (
-                minY <= maxY
-            ) {
-                (
-                    maxY -
-                        minY
-                    ).toDouble() /
-                    (bottom - top)
-            } else {
-                0.0
-            }
-
-        val pieceWidth =
-            if (
-                minX <= maxX
-            ) {
-                (
-                    maxX -
-                        minX
-                    ).toDouble() /
-                    (right - left)
-            } else {
-                0.0
-            }
-
-        val upper =
-            regionOccupancy(
-                bitmap,
-                background,
-                left,
-                top,
-                right,
-                top +
-                    (bottom - top) / 3
+        val types =
+            charArrayOf(
+                'R',
+                'N',
+                'B',
+                'Q',
+                'K',
+                'P'
             )
 
-        val middle =
-            regionOccupancy(
-                bitmap,
-                background,
-                left,
-                top +
-                    (bottom - top) / 3,
-                right,
-                top +
-                    2 *
-                    (bottom - top) / 3
-            )
+        for (
+            type in types
+        ) {
 
-        val lower =
-            regionOccupancy(
-                bitmap,
-                background,
-                left,
-                top +
-                    2 *
-                    (bottom - top) / 3,
-                right,
-                bottom
+            val white =
+                templates.first {
+                    it.piece ==
+                        type
+                }
+
+            val black =
+                templates.first {
+                    it.piece ==
+                        type.lowercaseChar()
+                }
+
+            val whiteScore =
+                dot(
+                    feature.values,
+                    white.values
+                )
+
+            val blackScore =
+                dot(
+                    feature.values,
+                    black.values
+                )
+
+            typeScores[type] =
+                maxOf(
+                    whiteScore,
+                    blackScore
+                )
+        }
+
+        val best =
+            typeScores
+                .maxByOrNull {
+                    it.value
+                }
+
+        if (
+            best == null ||
+            best.value < 0.48
+        ) {
+
+            square.recycle()
+
+            return Pair(
+                '.',
+                best?.value
+                    ?: 0.0
             )
+        }
 
         /*
-         * Prosty klasyfikator kształtów.
+         * Typ już znamy.
          *
-         * Jest przeznaczony konkretnie do
-         * używanego przez Ciebie zestawu figur.
+         * Teraz niezależnie określamy kolor.
          */
+        val whitePiece =
+            feature.foregroundBrightness >
+                whitePieceBrightnessThreshold
 
-        val type =
-            when {
-
-                /*
-                 * pion
-                 */
-                pieceWidth < 0.55 &&
-                pieceHeight < 0.90 &&
-                upper < 0.38 -> {
-
-                    'P'
-                }
-
-                /*
-                 * skoczek – dużo masy w górze
-                 * i asymetryczny kształt.
-                 */
-                upper >
-                    middle * 0.90 &&
-                pieceWidth >
-                    0.55 -> {
-
-                    'N'
-                }
-
-                /*
-                 * wieża – szeroka góra i szeroki dół.
-                 */
-                upper > 0.35 &&
-                lower > 0.45 &&
-                abs(
-                    upper -
-                        lower
-                ) < 0.22 -> {
-
-                    'R'
-                }
-
-                /*
-                 * hetman – bardzo szeroka figura.
-                 */
-                pieceWidth > 0.78 &&
-                upper > 0.30 -> {
-
-                    'Q'
-                }
-
-                /*
-                 * król – wysoki i duży środek.
-                 */
-                pieceHeight > 0.82 &&
-                middle > 0.38 -> {
-
-                    'K'
-                }
-
-                /*
-                 * pozostały wysoki,
-                 * wąski kształt = goniec.
-                 */
-                else -> {
-
-                    'B'
-                }
-            }
-
-        val piece =
+        val result =
             if (
                 whitePiece
             ) {
 
-                type
+                best.key
 
             } else {
 
-                type.lowercaseChar()
+                best.key
+                    .lowercaseChar()
             }
 
+        square.recycle()
+
         return Pair(
-            piece,
-            fill
+            result,
+            best.value
         )
     }
 
-    private fun regionOccupancy(
-        bitmap: Bitmap,
-        background: DoubleArray,
-        left: Int,
-        top: Int,
-        right: Int,
-        bottom: Int
-    ): Double {
+    private data class Feature(
+        val values: FloatArray,
+        val occupancy: Double,
+        val foregroundBrightness: Double
+    )
 
-        if (
-            right <= left ||
-            bottom <= top
-        ) {
-            return 0.0
-        }
+    private fun createFeature(
+        bitmap: Bitmap
+    ): Feature {
 
-        var active = 0
-        var total = 0
+        val width =
+            bitmap.width
 
-        val step =
+        val height =
+            bitmap.height
+
+        /*
+         * Kolor tła liczymy z czterech rogów.
+         *
+         * Dzięki temu działa zarówno na jasnym,
+         * ciemnym, jak i zaznaczonym na zielono polu.
+         */
+        val patch =
             maxOf(
-                2,
-                (right - left) / 18
+                3,
+                (
+                    minOf(
+                        width,
+                        height
+                    ) *
+                        0.12f
+                    ).toInt()
             )
 
-        var y = top
+        val backgroundPixels =
+            mutableListOf<Int>()
 
-        while (
-            y < bottom
+        fun addCorner(
+            startX: Int,
+            startY: Int
         ) {
 
-            var x = left
+            for (
+                y in startY until
+                    minOf(
+                        height,
+                        startY + patch
+                    )
+            ) {
 
-            while (
-                x < right
+                for (
+                    x in startX until
+                        minOf(
+                            width,
+                            startX + patch
+                        )
+                ) {
+
+                    if (
+                        x in 0 until width &&
+                        y in 0 until height
+                    ) {
+
+                        backgroundPixels +=
+                            bitmap.getPixel(
+                                x,
+                                y
+                            )
+                    }
+                }
+            }
+        }
+
+        addCorner(
+            0,
+            0
+        )
+
+        addCorner(
+            width -
+                patch,
+            0
+        )
+
+        addCorner(
+            0,
+            height -
+                patch
+        )
+
+        addCorner(
+            width -
+                patch,
+            height -
+                patch
+        )
+
+        val bgR =
+            medianChannel(
+                backgroundPixels,
+                16
+            )
+
+        val bgG =
+            medianChannel(
+                backgroundPixels,
+                8
+            )
+
+        val bgB =
+            medianChannel(
+                backgroundPixels,
+                0
+            )
+
+        val residual =
+            FloatArray(
+                width *
+                    height
+            )
+
+        var absoluteSum =
+            0.0
+
+        val foregroundLuminance =
+            mutableListOf<Double>()
+
+        var index =
+            0
+
+        for (
+            y in 0 until
+                height
+        ) {
+
+            for (
+                x in 0 until
+                    width
             ) {
 
                 val pixel =
@@ -1011,222 +596,1027 @@ class BoardRecognizer {
                         y
                     )
 
+                val r =
+                    (
+                        pixel shr
+                            16
+                        ) and 255
+
+                val g =
+                    (
+                        pixel shr
+                            8
+                        ) and 255
+
+                val b =
+                    pixel and 255
+
+                val dr =
+                    r -
+                        bgR
+
+                val dg =
+                    g -
+                        bgG
+
+                val db =
+                    b -
+                        bgB
+
+                val signedLuminance =
+                    (
+                        dr *
+                            0.299 +
+                            dg *
+                            0.587 +
+                            db *
+                            0.114
+                        )
+
+                residual[index++] =
+                    signedLuminance
+                        .toFloat()
+
+                absoluteSum +=
+                    abs(
+                        signedLuminance
+                    )
+
+                /*
+                 * Kolor figury sprawdzamy tylko
+                 * dla pikseli wyraźnie różnych
+                 * od tła.
+                 */
+                val distance =
+                    sqrt(
+                        (
+                            dr *
+                                dr +
+                                dg *
+                                dg +
+                                db *
+                                db
+                            ).toDouble()
+                    )
+
+                val inside =
+                    x >
+                        width *
+                            0.08 &&
+                        x <
+                        width *
+                            0.92 &&
+                        y >
+                        height *
+                            0.05 &&
+                        y <
+                        height *
+                            0.95
+
                 if (
-                    colorDistance(
-                        pixel,
-                        background
-                    ) > 35.0
+                    distance >
+                    35.0 &&
+                    inside
                 ) {
 
-                    active++
+                    val luminance =
+                        r *
+                            0.299 +
+                            g *
+                            0.587 +
+                            b *
+                            0.114
+
+                    foregroundLuminance +=
+                        luminance
                 }
-
-                total++
-                x += step
             }
-
-            y += step
         }
 
-        if (
-            total == 0
-        ) {
-            return 0.0
-        }
-
-        return active.toDouble() /
-            total
-    }
-
-    private fun expectedSquareColor(
-        row: Int,
-        col: Int,
-        bitmap: Bitmap,
-        area: BoardArea
-    ): DoubleArray {
-
-        val cell =
-            area.size / 8f
-
-        val sampleX =
-            (
-                area.left +
-                    col * cell +
-                    cell * 0.08f
-                ).toInt()
-
-        val sampleY =
-            (
-                area.top +
-                    row * cell +
-                    cell * 0.08f
-                ).toInt()
-
-        val pixel =
-            safePixel(
-                bitmap,
-                sampleX,
-                sampleY
-            )
-
-        if (
-            pixel != null
-        ) {
-
-            val r =
-                ((pixel shr 16) and 255)
-                    .toDouble()
-
-            val g =
-                ((pixel shr 8) and 255)
-                    .toDouble()
-
-            val b =
-                (pixel and 255)
-                    .toDouble()
-
-            /*
-             * Jeśli próbka przypomina jeden
-             * z kolorów planszy, używamy jej.
-             *
-             * Dzięki temu działa również
-             * przy lekkich różnicach jasności.
-             */
-            if (
-                minOf(
-                    colorDistance(
-                        pixel,
-                        lightSquare
-                    ),
-                    colorDistance(
-                        pixel,
-                        darkSquare
+        val occupancy =
+            absoluteSum /
+                (
+                    width *
+                        height
                     )
-                ) < 70.0
-            ) {
 
-                return doubleArrayOf(
-                    r,
-                    g,
-                    b
-                )
-            }
-        }
-
-        return if (
-            (row + col) % 2 == 0
-        ) {
-
-            lightSquare
-
-        } else {
-
-            darkSquare
-        }
-    }
-
-    private fun detectOrientation(
-        bitmap: Bitmap,
-        area: BoardArea
-    ): Boolean {
-
-        val top =
-            rowPieceBrightness(
-                bitmap,
-                area,
-                0
+        /*
+         * Z residualu robimy obraz 20×20.
+         */
+        val residualBitmap =
+            Bitmap.createBitmap(
+                width,
+                height,
+                Bitmap.Config.ARGB_8888
             )
 
-        val bottom =
-            rowPieceBrightness(
-                bitmap,
-                area,
-                7
-            )
-
-        return bottom > top
-    }
-
-    private fun rowPieceBrightness(
-        bitmap: Bitmap,
-        area: BoardArea,
-        row: Int
-    ): Double {
-
-        val cell =
-            area.size / 8f
-
-        var total =
-            0.0
-
-        var count =
+        index =
             0
 
         for (
-            col in 0..7
+            y in 0 until
+                height
         ) {
 
-            /*
-             * Kilka punktów w środku figury,
-             * nie tylko jeden pixel.
-             */
             for (
-                yFraction in
-                listOf(
-                    0.35f,
-                    0.50f,
-                    0.65f
+                x in 0 until
+                    width
+            ) {
+
+                val value =
+                    (
+                        residual[index++] +
+                            128f
+                        )
+                        .toInt()
+                        .coerceIn(
+                            0,
+                            255
+                        )
+
+                residualBitmap.setPixel(
+                    x,
+                    y,
+                    android.graphics.Color.rgb(
+                        value,
+                        value,
+                        value
+                    )
                 )
+            }
+        }
+
+        val scaled =
+            Bitmap.createScaledBitmap(
+                residualBitmap,
+                20,
+                20,
+                true
+            )
+
+        residualBitmap.recycle()
+
+        val values =
+            FloatArray(
+                400
+            )
+
+        var sum =
+            0.0
+
+        index =
+            0
+
+        for (
+            y in 0 until
+                20
+        ) {
+
+            for (
+                x in 0 until
+                    20
+            ) {
+
+                val pixel =
+                    scaled.getPixel(
+                        x,
+                        y
+                    )
+
+                val value =
+                    (
+                        (
+                            pixel shr
+                                16
+                            ) and
+                            255
+                        ) -
+                        128
+
+                values[index++] =
+                    value.toFloat()
+
+                sum +=
+                    value
+            }
+        }
+
+        scaled.recycle()
+
+        val mean =
+            sum /
+                values.size
+
+        var norm =
+            0.0
+
+        for (
+            i in values.indices
+        ) {
+
+            values[i] =
+                (
+                    values[i] -
+                        mean
+                    )
+                    .toFloat()
+
+            norm +=
+                values[i] *
+                    values[i]
+        }
+
+        norm =
+            sqrt(
+                norm
+            )
+
+        if (
+            norm >
+            0.00001
+        ) {
+
+            for (
+                i in values.indices
+            ) {
+
+                values[i] =
+                    (
+                        values[i] /
+                            norm
+                        )
+                        .toFloat()
+            }
+        }
+
+        val foregroundBrightness =
+            medianDouble(
+                foregroundLuminance
+            )
+
+        return Feature(
+            values =
+                values,
+
+            occupancy =
+                occupancy,
+
+            foregroundBrightness =
+                foregroundBrightness
+        )
+    }
+
+    private fun extractSquare(
+        bitmap: Bitmap,
+        area: BoardArea,
+        row: Int,
+        col: Int
+    ): Bitmap? {
+
+        val cell =
+            area.size /
+                8f
+
+        /*
+         * Lekko odcinamy brzegi pola:
+         *
+         * - współrzędne a-h / 1-8,
+         * - evaluation bar,
+         * - krawędzie sąsiednich pól.
+         */
+        val marginX =
+            cell *
+                0.06f
+
+        val marginY =
+            cell *
+                0.04f
+
+        val left =
+            (
+                area.left +
+                    col *
+                        cell +
+                    marginX
+                )
+                .toInt()
+
+        val right =
+            (
+                area.left +
+                    (
+                        col +
+                            1
+                        ) *
+                        cell -
+                    marginX
+                )
+                .toInt()
+
+        val top =
+            (
+                area.top +
+                    row *
+                        cell +
+                    marginY
+                )
+                .toInt()
+
+        val bottom =
+            (
+                area.top +
+                    (
+                        row +
+                            1
+                        ) *
+                        cell -
+                    marginY
+                )
+                .toInt()
+
+        if (
+            left <
+            0 ||
+            top <
+            0 ||
+            right >
+            bitmap.width ||
+            bottom >
+            bitmap.height ||
+            right <=
+            left ||
+            bottom <=
+            top
+        ) {
+
+            return null
+        }
+
+        return Bitmap.createBitmap(
+            bitmap,
+            left,
+            top,
+            right -
+                left,
+            bottom -
+                top
+        )
+    }
+
+    private fun findBoard(
+        bitmap: Bitmap
+    ): BoardArea? {
+
+        val size =
+            bitmap.width
+
+        val cell =
+            size /
+                8f
+
+        /*
+         * Szukamy planszy pełnej szerokości.
+         */
+        var top =
+            120
+
+        val maxTop =
+            bitmap.height -
+                size -
+                60
+
+        while (
+            top <=
+            maxTop
+        ) {
+
+            var correct =
+                0
+
+            var reverse =
+                0
+
+            /*
+             * Próbkujemy kilka wysokości wewnątrz
+             * pierwszego rzędu pól zamiast dokładnie
+             * na krawędzi planszy.
+             */
+            val testY =
+                (
+                    top +
+                        cell *
+                            0.12f
+                    )
+                    .toInt()
+
+            for (
+                col in 0..7
             ) {
 
                 val x =
                     (
-                        area.left +
-                            col * cell +
-                            cell * 0.5f
-                        ).toInt()
+                        col *
+                            cell +
+                            cell *
+                                0.12f
+                        )
+                        .toInt()
+
+                if (
+                    x !in
+                    0 until
+                        bitmap.width ||
+                    testY !in
+                    0 until
+                        bitmap.height
+                ) {
+
+                    continue
+                }
+
+                val pixel =
+                    bitmap.getPixel(
+                        x,
+                        testY
+                    )
+
+                val normalColor =
+                    if (
+                        col %
+                        2 ==
+                        0
+                    ) {
+
+                        lightSquare
+
+                    } else {
+
+                        darkSquare
+                    }
+
+                val reverseColor =
+                    if (
+                        col %
+                        2 ==
+                        0
+                    ) {
+
+                        darkSquare
+
+                    } else {
+
+                        lightSquare
+                    }
+
+                if (
+                    colorDistance(
+                        pixel,
+                        normalColor
+                    ) <
+                    65.0
+                ) {
+
+                    correct++
+                }
+
+                if (
+                    colorDistance(
+                        pixel,
+                        reverseColor
+                    ) <
+                    65.0
+                ) {
+
+                    reverse++
+                }
+            }
+
+            if (
+                correct >=
+                6 ||
+                reverse >=
+                6
+            ) {
+
+                /*
+                 * Dodatkowa kontrola:
+                 * wzór ma istnieć także niżej.
+                 */
+                if (
+                    validateBoard(
+                        bitmap,
+                        top,
+                        size
+                    )
+                ) {
+
+                    return BoardArea(
+                        left =
+                            0,
+
+                        top =
+                            top,
+
+                        size =
+                            size
+                    )
+                }
+            }
+
+            top +=
+                2
+        }
+
+        return null
+    }
+
+    private fun validateBoard(
+        bitmap: Bitmap,
+        top: Int,
+        size: Int
+    ): Boolean {
+
+        val cell =
+            size /
+                8f
+
+        var alternating =
+            0
+
+        var checks =
+            0
+
+        for (
+            row in
+                listOf(
+                    2,
+                    3,
+                    4,
+                    5
+                )
+        ) {
+
+            for (
+                col in 0..6
+            ) {
 
                 val y =
                     (
-                        area.top +
-                            row * cell +
+                        top +
+                            row *
+                                cell +
                             cell *
-                            yFraction
-                        ).toInt()
+                                0.12f
+                        )
+                        .toInt()
 
-                val pixel =
-                    safePixel(
-                        bitmap,
-                        x,
+                val x1 =
+                    (
+                        col *
+                            cell +
+                            cell *
+                                0.12f
+                        )
+                        .toInt()
+
+                val x2 =
+                    (
+                        (
+                            col +
+                                1
+                            ) *
+                            cell +
+                            cell *
+                                0.12f
+                        )
+                        .toInt()
+
+                if (
+                    y !in
+                    0 until
+                        bitmap.height ||
+                    x1 !in
+                    0 until
+                        bitmap.width ||
+                    x2 !in
+                    0 until
+                        bitmap.width
+                ) {
+
+                    continue
+                }
+
+                val a =
+                    bitmap.getPixel(
+                        x1,
                         y
                     )
-                        ?: continue
 
-                total +=
-                    pixelBrightness(
-                        pixel
+                val b =
+                    bitmap.getPixel(
+                        x2,
+                        y
                     )
 
-                count++
+                checks++
+
+                if (
+                    rawColorDistance(
+                        a,
+                        b
+                    ) >
+                    25.0
+                ) {
+
+                    alternating++
+                }
             }
         }
 
-        return if (
-            count > 0
+        return (
+            checks >
+            0 &&
+            alternating
+                .toDouble() /
+                checks >
+            0.55
+            )
+    }
+
+    /*
+     * Orientacja:
+     *
+     * najpierw próbujemy określić ją na podstawie
+     * rozmieszczenia kolorów figur.
+     *
+     * W Analysis / Puzzle zwykle wystarcza.
+     */
+    private fun detectOrientation(
+        board: Array<CharArray>
+    ): Boolean {
+
+        var whiteTop =
+            0.0
+
+        var whiteBottom =
+            0.0
+
+        var blackTop =
+            0.0
+
+        var blackBottom =
+            0.0
+
+        for (
+            row in 0..7
         ) {
 
-            total /
-                count
+            val topWeight =
+                (
+                    7 -
+                        row
+                    )
+                    .toDouble()
 
-        } else {
+            val bottomWeight =
+                row
+                    .toDouble()
 
-            0.0
+            for (
+                col in 0..7
+            ) {
+
+                val piece =
+                    board[row][col]
+
+                if (
+                    piece == '.'
+                ) {
+
+                    continue
+                }
+
+                if (
+                    piece
+                        .isUpperCase()
+                ) {
+
+                    whiteTop +=
+                        topWeight
+
+                    whiteBottom +=
+                        bottomWeight
+
+                } else {
+
+                    blackTop +=
+                        topWeight
+
+                    blackBottom +=
+                        bottomWeight
+                }
+            }
         }
+
+        val normalScore =
+            whiteBottom +
+                blackTop
+
+        val reverseScore =
+            whiteTop +
+                blackBottom
+
+        return normalScore >=
+            reverseScore
+    }
+
+    private fun decodeTemplate(
+        encoded: String,
+        scale: Double
+    ): FloatArray {
+
+        val bytes =
+            Base64.decode(
+                encoded,
+                Base64.DEFAULT
+            )
+
+        val result =
+            FloatArray(
+                bytes.size
+            )
+
+        var mean =
+            0.0
+
+        for (
+            i in
+                bytes.indices
+        ) {
+
+            result[i] =
+                (
+                    bytes[i]
+                        .toDouble() /
+                        scale
+                    )
+                    .toFloat()
+
+            mean +=
+                result[i]
+        }
+
+        mean /=
+            result.size
+
+        var norm =
+            0.0
+
+        for (
+            i in
+                result.indices
+        ) {
+
+            result[i] =
+                (
+                    result[i] -
+                        mean
+                    )
+                    .toFloat()
+
+            norm +=
+                result[i] *
+                    result[i]
+        }
+
+        norm =
+            sqrt(
+                norm
+            )
+
+        if (
+            norm >
+            0.00001
+        ) {
+
+            for (
+                i in
+                    result.indices
+            ) {
+
+                result[i] =
+                    (
+                        result[i] /
+                            norm
+                        )
+                        .toFloat()
+            }
+        }
+
+        return result
+    }
+
+    private fun dot(
+        a: FloatArray,
+        b: FloatArray
+    ): Double {
+
+        val size =
+            minOf(
+                a.size,
+                b.size
+            )
+
+        var result =
+            0.0
+
+        for (
+            i in
+                0 until
+                    size
+        ) {
+
+            result +=
+                a[i] *
+                    b[i]
+        }
+
+        return result
+    }
+
+    private fun medianChannel(
+        pixels: List<Int>,
+        shift: Int
+    ): Double {
+
+        if (
+            pixels.isEmpty()
+        ) {
+
+            return 0.0
+        }
+
+        val values =
+            pixels
+                .map {
+
+                    (
+                        it shr
+                            shift
+                        ) and
+                        255
+                }
+                .sorted()
+
+        return values[
+            values.size /
+                2
+        ]
+            .toDouble()
+    }
+
+    private fun medianDouble(
+        values: List<Double>
+    ): Double {
+
+        if (
+            values.isEmpty()
+        ) {
+
+            return 0.0
+        }
+
+        val sorted =
+            values.sorted()
+
+        return sorted[
+            sorted.size /
+                2
+        ]
+    }
+
+    private fun colorDistance(
+        pixel: Int,
+        reference: DoubleArray
+    ): Double {
+
+        val r =
+            (
+                (
+                    pixel shr
+                        16
+                    ) and
+                    255
+                )
+                .toDouble()
+
+        val g =
+            (
+                (
+                    pixel shr
+                        8
+                    ) and
+                    255
+                )
+                .toDouble()
+
+        val b =
+            (
+                pixel and
+                    255
+                )
+                .toDouble()
+
+        val dr =
+            r -
+                reference[0]
+
+        val dg =
+            g -
+                reference[1]
+
+        val db =
+            b -
+                reference[2]
+
+        return sqrt(
+            dr *
+                dr +
+                dg *
+                    dg +
+                db *
+                    db
+        )
+    }
+
+    private fun rawColorDistance(
+        a: Int,
+        b: Int
+    ): Double {
+
+        val ar =
+            (
+                a shr
+                    16
+                ) and
+                255
+
+        val ag =
+            (
+                a shr
+                    8
+                ) and
+                255
+
+        val ab =
+            a and
+                255
+
+        val br =
+            (
+                b shr
+                    16
+                ) and
+                255
+
+        val bg =
+            (
+                b shr
+                    8
+                ) and
+                255
+
+        val bb =
+            b and
+                255
+
+        val dr =
+            ar -
+                br
+
+        val dg =
+            ag -
+                bg
+
+        val db =
+            ab -
+                bb
+
+        return sqrt(
+            (
+                dr *
+                    dr +
+                    dg *
+                        dg +
+                    db *
+                        db
+                )
+                .toDouble()
+        )
     }
 
     private fun boardToFen(
-        board:
-            Array<CharArray>
+        board: Array<CharArray>
     ): String {
 
         return buildString {
@@ -1254,14 +1644,16 @@ class BoardRecognizer {
                     } else {
 
                         if (
-                            empty > 0
+                            empty >
+                            0
                         ) {
 
                             append(
                                 empty
                             )
 
-                            empty = 0
+                            empty =
+                                0
                         }
 
                         append(
@@ -1271,7 +1663,8 @@ class BoardRecognizer {
                 }
 
                 if (
-                    empty > 0
+                    empty >
+                    0
                 ) {
 
                     append(
@@ -1280,87 +1673,15 @@ class BoardRecognizer {
                 }
 
                 if (
-                    row < 7
+                    row <
+                    7
                 ) {
 
-                    append("/")
+                    append(
+                        "/"
+                    )
                 }
             }
         }
-    }
-
-    private fun safePixel(
-        bitmap: Bitmap,
-        x: Int,
-        y: Int
-    ): Int? {
-
-        if (
-            x !in 0 until bitmap.width ||
-            y !in 0 until bitmap.height
-        ) {
-            return null
-        }
-
-        return bitmap.getPixel(
-            x,
-            y
-        )
-    }
-
-    private fun pixelBrightness(
-        pixel: Int
-    ): Double {
-
-        val r =
-            (pixel shr 16) and 255
-
-        val g =
-            (pixel shr 8) and 255
-
-        val b =
-            pixel and 255
-
-        return (
-            r * 0.299 +
-                g * 0.587 +
-                b * 0.114
-            )
-    }
-
-    private fun colorDistance(
-        pixel: Int,
-        reference: DoubleArray
-    ): Double {
-
-        val r =
-            ((pixel shr 16) and 255)
-                .toDouble()
-
-        val g =
-            ((pixel shr 8) and 255)
-                .toDouble()
-
-        val b =
-            (pixel and 255)
-                .toDouble()
-
-        val dr =
-            r -
-                reference[0]
-
-        val dg =
-            g -
-                reference[1]
-
-        val db =
-            b -
-                reference[2]
-
-        return sqrt(
-            dr * dr +
-                dg * dg +
-                db * db
-        )
     }
 }
