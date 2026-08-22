@@ -1,5 +1,7 @@
 package com.trading.stockfishoverlay
 
+import kotlin.math.abs
+
 class ChessPosition {
 
     private val board =
@@ -8,7 +10,7 @@ class ChessPosition {
     var whiteToMove = true
         private set
 
-    private var castle = "KQkq"
+    private var castling = "KQkq"
     private var enPassant = "-"
     private var halfMove = 0
     private var fullMove = 1
@@ -30,14 +32,15 @@ class ChessPosition {
             "RNBQKBNR"
         )
 
-        for (r in 0..7) {
-            for (c in 0..7) {
-                board[r][c] = start[r][c]
+        for (row in 0..7) {
+            for (col in 0..7) {
+                board[row][col] =
+                    start[row][col]
             }
         }
 
         whiteToMove = true
-        castle = "KQkq"
+        castling = "KQkq"
         enPassant = "-"
         halfMove = 0
         fullMove = 1
@@ -45,11 +48,248 @@ class ChessPosition {
 
     fun pieceAt(square: String): Char {
 
-        val c = square[0] - 'a'
-        val rank = square[1] - '0'
-        val r = 8 - rank
+        if (square.length != 2)
+            return '.'
 
-        return board[r][c]
+        val col =
+            square[0] - 'a'
+
+        val rank =
+            square[1] - '0'
+
+        val row =
+            8 - rank
+
+        if (
+            row !in 0..7 ||
+            col !in 0..7
+        ) {
+            return '.'
+        }
+
+        return board[row][col]
+    }
+
+    fun isOwnPiece(square: String): Boolean {
+
+        val piece =
+            pieceAt(square)
+
+        if (piece == '.')
+            return false
+
+        return if (whiteToMove) {
+            piece.isUpperCase()
+        } else {
+            piece.isLowerCase()
+        }
+    }
+
+    fun isPseudoLegal(
+        from: String,
+        to: String
+    ): Boolean {
+
+        if (
+            from.length != 2 ||
+            to.length != 2 ||
+            from == to
+        ) {
+            return false
+        }
+
+        val piece =
+            pieceAt(from)
+
+        if (piece == '.')
+            return false
+
+        if (!isOwnPiece(from))
+            return false
+
+        val target =
+            pieceAt(to)
+
+        if (
+            target != '.' &&
+            target.isUpperCase() ==
+            piece.isUpperCase()
+        ) {
+            return false
+        }
+
+        val fc =
+            from[0] - 'a'
+
+        val fr =
+            8 - (from[1] - '0')
+
+        val tc =
+            to[0] - 'a'
+
+        val tr =
+            8 - (to[1] - '0')
+
+        val dx =
+            tc - fc
+
+        val dy =
+            tr - fr
+
+        return when (
+            piece.uppercaseChar()
+        ) {
+
+            'P' -> {
+
+                val direction =
+                    if (piece.isUpperCase())
+                        -1
+                    else
+                        1
+
+                val startRow =
+                    if (piece.isUpperCase())
+                        6
+                    else
+                        1
+
+                if (
+                    dx == 0 &&
+                    dy == direction &&
+                    target == '.'
+                ) {
+                    true
+
+                } else if (
+                    dx == 0 &&
+                    dy == direction * 2 &&
+                    fr == startRow &&
+                    target == '.'
+                ) {
+
+                    board[
+                        fr + direction
+                    ][fc] == '.'
+
+                } else {
+
+                    abs(dx) == 1 &&
+                    dy == direction
+                }
+            }
+
+            'N' -> {
+
+                (
+                    abs(dx) == 1 &&
+                    abs(dy) == 2
+                ) ||
+                (
+                    abs(dx) == 2 &&
+                    abs(dy) == 1
+                )
+            }
+
+            'B' -> {
+
+                abs(dx) == abs(dy) &&
+                    pathClear(
+                        fr,
+                        fc,
+                        tr,
+                        tc
+                    )
+            }
+
+            'R' -> {
+
+                (
+                    dx == 0 ||
+                    dy == 0
+                ) &&
+                pathClear(
+                    fr,
+                    fc,
+                    tr,
+                    tc
+                )
+            }
+
+            'Q' -> {
+
+                (
+                    dx == 0 ||
+                    dy == 0 ||
+                    abs(dx) == abs(dy)
+                ) &&
+                pathClear(
+                    fr,
+                    fc,
+                    tr,
+                    tc
+                )
+            }
+
+            'K' -> {
+
+                (
+                    abs(dx) <= 1 &&
+                    abs(dy) <= 1
+                ) ||
+                (
+                    dy == 0 &&
+                    abs(dx) == 2
+                )
+            }
+
+            else -> false
+        }
+    }
+
+    private fun pathClear(
+        fromRow: Int,
+        fromCol: Int,
+        toRow: Int,
+        toCol: Int
+    ): Boolean {
+
+        val stepRow =
+            when {
+                toRow > fromRow -> 1
+                toRow < fromRow -> -1
+                else -> 0
+            }
+
+        val stepCol =
+            when {
+                toCol > fromCol -> 1
+                toCol < fromCol -> -1
+                else -> 0
+            }
+
+        var row =
+            fromRow + stepRow
+
+        var col =
+            fromCol + stepCol
+
+        while (
+            row != toRow ||
+            col != toCol
+        ) {
+
+            if (
+                board[row][col] != '.'
+            ) {
+                return false
+            }
+
+            row += stepRow
+            col += stepCol
+        }
+
+        return true
     }
 
     fun applyMove(uci: String): Boolean {
@@ -57,89 +297,118 @@ class ChessPosition {
         if (uci.length < 4)
             return false
 
-        val from = uci.substring(0, 2)
-        val to = uci.substring(2, 4)
+        val from =
+            uci.substring(0, 2)
 
-        val fc = from[0] - 'a'
-        val fr = 8 - (from[1] - '0')
+        val to =
+            uci.substring(2, 4)
 
-        val tc = to[0] - 'a'
-        val tr = 8 - (to[1] - '0')
+        val fc =
+            from[0] - 'a'
+
+        val fr =
+            8 - (from[1] - '0')
+
+        val tc =
+            to[0] - 'a'
+
+        val tr =
+            8 - (to[1] - '0')
 
         if (
             fr !in 0..7 ||
             fc !in 0..7 ||
             tr !in 0..7 ||
             tc !in 0..7
-        ) return false
+        ) {
+            return false
+        }
 
-        var piece = board[fr][fc]
+        var piece =
+            board[fr][fc]
 
         if (piece == '.')
             return false
 
-        val captured = board[tr][tc]
+        val captured =
+            board[tr][tc]
 
         board[fr][fc] = '.'
 
-        // Roszada
+        // en passant
+        if (
+            piece.uppercaseChar() == 'P' &&
+            fc != tc &&
+            captured == '.'
+        ) {
+
+            if (piece.isUpperCase()) {
+                if (tr + 1 <= 7)
+                    board[tr + 1][tc] = '.'
+            } else {
+                if (tr - 1 >= 0)
+                    board[tr - 1][tc] = '.'
+            }
+        }
+
+        // roszada
         if (
             piece.uppercaseChar() == 'K' &&
-            kotlin.math.abs(tc - fc) == 2
+            abs(tc - fc) == 2
         ) {
 
             if (tc == 6) {
-                board[tr][5] = board[tr][7]
+
+                board[tr][5] =
+                    board[tr][7]
+
                 board[tr][7] = '.'
+
             } else if (tc == 2) {
-                board[tr][3] = board[tr][0]
+
+                board[tr][3] =
+                    board[tr][0]
+
                 board[tr][0] = '.'
             }
         }
 
-        // En passant
-        if (
-            piece.uppercaseChar() == 'P' &&
-            captured == '.' &&
-            fc != tc
-        ) {
-
-            if (piece.isUpperCase()) {
-                board[tr + 1][tc] = '.'
-            } else {
-                board[tr - 1][tc] = '.'
-            }
-        }
-
-        // Promocja
+        // promocja
         if (uci.length >= 5) {
 
             val promotion =
                 uci[4]
 
             piece =
-                if (piece.isUpperCase())
+                if (piece.isUpperCase()) {
                     promotion.uppercaseChar()
-                else
+                } else {
                     promotion.lowercaseChar()
+                }
         }
 
-        board[tr][tc] = piece
+        board[tr][tc] =
+            piece
 
-        updateCastling(piece, from)
+        updateCastling(
+            piece,
+            from,
+            to,
+            captured
+        )
 
         enPassant = "-"
 
         if (
             piece.uppercaseChar() == 'P' &&
-            kotlin.math.abs(tr - fr) == 2
+            abs(tr - fr) == 2
         ) {
 
+            val middleRow =
+                (fr + tr) / 2
+
             val middleRank =
-                if (piece.isUpperCase())
-                    from[1] + 1
-                else
-                    from[1] - 1
+                8 - middleRow
 
             enPassant =
                 "${from[0]}$middleRank"
@@ -154,42 +423,83 @@ class ChessPosition {
             halfMove++
         }
 
-        if (!whiteToMove)
+        if (!whiteToMove) {
             fullMove++
+        }
 
-        whiteToMove = !whiteToMove
+        whiteToMove =
+            !whiteToMove
 
         return true
     }
 
     private fun updateCastling(
         piece: Char,
-        from: String
+        from: String,
+        to: String,
+        captured: Char
     ) {
 
         if (piece == 'K') {
-            castle =
-                castle
+            castling =
+                castling
                     .replace("K", "")
                     .replace("Q", "")
         }
 
         if (piece == 'k') {
-            castle =
-                castle
+            castling =
+                castling
                     .replace("k", "")
                     .replace("q", "")
         }
 
         when (from) {
-            "a1" -> castle = castle.replace("Q", "")
-            "h1" -> castle = castle.replace("K", "")
-            "a8" -> castle = castle.replace("q", "")
-            "h8" -> castle = castle.replace("k", "")
+
+            "a1" ->
+                castling =
+                    castling.replace("Q", "")
+
+            "h1" ->
+                castling =
+                    castling.replace("K", "")
+
+            "a8" ->
+                castling =
+                    castling.replace("q", "")
+
+            "h8" ->
+                castling =
+                    castling.replace("k", "")
         }
 
-        if (castle.isEmpty())
-            castle = "-"
+        if (captured == 'R') {
+
+            when (to) {
+
+                "a1" ->
+                    castling =
+                        castling.replace("Q", "")
+
+                "h1" ->
+                    castling =
+                        castling.replace("K", "")
+            }
+        }
+
+        if (captured == 'r') {
+
+            when (to) {
+
+                "a8" ->
+                    castling =
+                        castling.replace("q", "")
+
+                "h8" ->
+                    castling =
+                        castling.replace("k", "")
+            }
+        }
     }
 
     fun toFen(): String {
@@ -197,47 +507,58 @@ class ChessPosition {
         val rows =
             mutableListOf<String>()
 
-        for (r in 0..7) {
+        for (row in 0..7) {
 
-            val sb = StringBuilder()
+            val result =
+                StringBuilder()
+
             var empty = 0
 
-            for (c in 0..7) {
+            for (col in 0..7) {
 
-                val p = board[r][c]
+                val piece =
+                    board[row][col]
 
-                if (p == '.') {
+                if (piece == '.') {
+
                     empty++
+
                 } else {
 
                     if (empty > 0) {
-                        sb.append(empty)
+                        result.append(empty)
                         empty = 0
                     }
 
-                    sb.append(p)
+                    result.append(piece)
                 }
             }
 
             if (empty > 0)
-                sb.append(empty)
+                result.append(empty)
 
-            rows += sb.toString()
+            rows += result.toString()
         }
+
+        val castle =
+            if (castling.isEmpty())
+                "-"
+            else
+                castling
 
         return buildString {
 
-            append(rows.joinToString("/"))
-            append(" ")
+            append(
+                rows.joinToString("/")
+            )
 
             append(
                 if (whiteToMove)
-                    "w"
+                    " w "
                 else
-                    "b"
+                    " b "
             )
 
-            append(" ")
             append(castle)
             append(" ")
             append(enPassant)
@@ -246,18 +567,5 @@ class ChessPosition {
             append(" ")
             append(fullMove)
         }
-    }
-
-    fun isOwnPiece(square: String): Boolean {
-
-        val p = pieceAt(square)
-
-        if (p == '.')
-            return false
-
-        return if (whiteToMove)
-            p.isUpperCase()
-        else
-            p.isLowerCase()
     }
 }
