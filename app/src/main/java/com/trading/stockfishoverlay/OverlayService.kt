@@ -30,7 +30,6 @@ class OverlayService : Service() {
 
     companion object {
         const val ACTION_START_LIVE = "START_LIVE"
-
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 
@@ -71,7 +70,9 @@ class OverlayService : Service() {
                         "LIVE • przechwytywanie zatrzymane"
                 }
 
-                releaseCaptureResources()
+                releaseCaptureResources(
+                    stopProjection = false
+                )
             }
         }
 
@@ -81,15 +82,21 @@ class OverlayService : Service() {
         engine = StockfishEngine(this)
 
         windowManager =
-            getSystemService(WINDOW_SERVICE) as WindowManager
+            getSystemService(
+                WINDOW_SERVICE
+            ) as WindowManager
 
         captureThread =
-            HandlerThread("StockfishCapture").apply {
+            HandlerThread(
+                "StockfishCapture"
+            ).apply {
                 start()
             }
 
         captureHandler =
-            Handler(captureThread!!.looper)
+            Handler(
+                captureThread!!.looper
+            )
 
         createChannel()
         createOverlay()
@@ -152,7 +159,7 @@ class OverlayService : Service() {
 
     private fun startForegroundNow() {
 
-        val openApp =
+        val pendingIntent =
             PendingIntent.getActivity(
                 this,
                 0,
@@ -178,7 +185,9 @@ class OverlayService : Service() {
                     "Analiza ekranu aktywna"
                 )
                 .setOngoing(true)
-                .setContentIntent(openApp)
+                .setContentIntent(
+                    pendingIntent
+                )
                 .build()
 
         if (Build.VERSION.SDK_INT >= 29) {
@@ -204,7 +213,9 @@ class OverlayService : Service() {
         data: Intent
     ) {
 
-        releaseCaptureResources()
+        releaseCaptureResources(
+            stopProjection = true
+        )
 
         statusText?.post {
             statusText?.text =
@@ -248,7 +259,8 @@ class OverlayService : Service() {
             DisplayMetrics()
 
         @Suppress("DEPRECATION")
-        windowManager.defaultDisplay
+        windowManager
+            .defaultDisplay
             .getRealMetrics(metrics)
 
         val width =
@@ -268,6 +280,19 @@ class OverlayService : Service() {
                 2
             )
 
+        val reader =
+            imageReader
+
+        if (reader == null) {
+
+            statusText?.post {
+                statusText?.text =
+                    "LIVE • błąd ImageReader"
+            }
+
+            return
+        }
+
         virtualDisplay =
             projection.createVirtualDisplay(
                 "StockfishLive",
@@ -276,7 +301,7 @@ class OverlayService : Service() {
                 density,
                 DisplayManager
                     .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader!!.surface,
+                reader.surface,
                 null,
                 captureHandler
             )
@@ -296,34 +321,53 @@ class OverlayService : Service() {
                 "LIVE • VirtualDisplay OK"
         }
 
-        imageReader!!
-            .setOnImageAvailableListener(
-                { reader ->
+        reader.setOnImageAvailableListener(
+            { imageReader ->
 
-                    val image =
-                        reader.acquireLatestImage()
-                            ?: return@setOnImageAvailableListener
+                val image =
+                    imageReader.acquireLatestImage()
+                        ?: return@setOnImageAvailableListener
 
-                    val now =
-                        System.currentTimeMillis()
+                val now =
+                    System.currentTimeMillis()
 
-                    if (
-                        now - lastCapturedFrame <
-                        CAPTURE_INTERVAL
-                    ) {
+                if (
+                    now - lastCapturedFrame <
+                    CAPTURE_INTERVAL
+                ) {
 
-                        image.close()
-                        return@setOnImageAvailableListener
-                    }
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
 
-                    lastCapturedFrame = now
+                lastCapturedFrame = now
 
-                    try {
+                try {
 
-                        statusText?.post {
-                            statusText?.text =
-                                "LIVE • klatka odebrana"
-                        }
+                    val plane =
+                        image.planes[0]
 
-                        val plane =
-                            image.planes
+                    val buffer =
+                        plane.buffer
+
+                    val pixelStride =
+                        plane.pixelStride
+
+                    val rowStride =
+                        plane.rowStride
+
+                    val rowPadding =
+                        rowStride -
+                            pixelStride * width
+
+                    val bitmapWidth =
+                        width +
+                            rowPadding /
+                            pixelStride
+
+                    val fullBitmap =
+                        Bitmap.createBitmap(
+                            bitmapWidth,
+                            height,
+                            Bitmap.Config.ARGB_8888
+                        )
