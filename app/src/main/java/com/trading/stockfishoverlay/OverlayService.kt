@@ -31,125 +31,95 @@ class OverlayService : Service() {
 
     companion object {
 
-        const val ACTION_START_LIVE =
-            "START_LIVE"
+        const val ACTION_START_LIVE = "START_LIVE"
+        const val EXTRA_RESULT_CODE = "resultCode"
+        const val EXTRA_RESULT_DATA = "resultData"
 
-        const val EXTRA_RESULT_CODE =
-            "resultCode"
+        // Jak często patrzymy na ekran.
+        private const val FRAME_INTERVAL = 180L
 
-        const val EXTRA_RESULT_DATA =
-            "resultData"
+        // Jak duża zmiana obrazu oznacza ruch.
+        private const val CHANGE_THRESHOLD = 2.8
 
-        /*
-         * 4 sprawdzenia ekranu na sekundę.
-         */
-        private const val FRAME_INTERVAL =
-            250L
+        // Po ruchu czekamy chwilę, aż animacja się skończy.
+        private const val DEBOUNCE_MS = 300L
 
-        /*
-         * Jak mocno musi zmienić się obraz planszy,
-         * żeby uruchomić rozpoznawanie 64 pól.
-         */
-        private const val CHANGE_THRESHOLD =
-            3.2
+        // Jeśli rozpoznanie FEN się nie uda,
+        // ponawiamy próbę po takim czasie.
+        private const val RETRY_MS = 250L
 
-        /*
-         * Pozycja musi być taka sama w dwóch
-         * kolejnych odczytach.
-         */
-        private const val REQUIRED_CONFIRMATIONS =
-            2
-
-        /*
-         * Korekta położenia strzałek.
-         */
-        private const val BOARD_Y_CORRECTION_SQUARES =
-            0.70f
+        // Korekta położenia strzałek.
+        private const val BOARD_Y_CORRECTION_SQUARES = 0.70f
     }
 
-    private lateinit var windowManager:
-        WindowManager
+    private lateinit var windowManager: WindowManager
+    private lateinit var engine: StockfishEngine
 
-    private lateinit var engine:
-        StockfishEngine
-
-    private val recognizer =
-        BoardRecognizer()
+    private val recognizer = BoardRecognizer()
 
     private val mainHandler =
-        Handler(
-            Looper.getMainLooper()
-        )
+        Handler(Looper.getMainLooper())
 
     private val analysing =
         AtomicBoolean(false)
 
-    private var projection:
-        MediaProjection? = null
+    private var projection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
 
-    private var virtualDisplay:
-        VirtualDisplay? = null
+    private var captureThread: HandlerThread? = null
+    private var captureHandler: Handler? = null
 
-    private var imageReader:
-        ImageReader? = null
+    private var infoOverlay: LinearLayout? = null
+    private var boardOverlay: BoardOverlayView? = null
 
-    private var captureThread:
-        HandlerThread? = null
+    private var statusText: TextView? = null
+    private var analysisText: TextView? = null
+    private var sideButton: Button? = null
 
-    private var captureHandler:
-        Handler? = null
-
-    private var infoOverlay:
-        LinearLayout? = null
-
-    private var boardOverlay:
-        BoardOverlayView? = null
-
-    private var statusText:
-        TextView? = null
-
-    private var analysisText:
-        TextView? = null
-
-    private var sideButton:
-        Button? = null
-
-    private var lastFrameTime =
-        0L
+    private var lastFrameTime = 0L
 
     /*
-     * Ostatnia ZATWIERDZONA pozycja.
+     * Ostatnia pozycja faktycznie wysłana
+     * do Stockfisha.
      */
-    private var lastPlacement:
-        String? = null
+    private var lastPlacement: String? = null
 
     /*
-     * Ostatni kandydat na nową pozycję.
+     * Lekki podpis poprzedniej klatki.
      */
-    private var candidatePlacement:
-        String? = null
-
-    private var candidateCount =
-        0
+    private var previousSignature: LongArray? = null
 
     /*
-     * Lekki podpis planszy.
+     * Kiedy ostatnio wykryliśmy zmianę obrazu.
      */
-    private var previousSignature:
-        LongArray? = null
+    private var lastBoardChangeTime = 0L
 
     /*
-     * Tylko użytkownik może to zmienić.
+     * Czy czekamy na rozpoznanie nowej pozycji.
+     */
+    private var positionPending = true
+
+    /*
+     * Ostatnia próba pełnego rozpoznania.
+     */
+    private var lastRecognitionAttempt = 0L
+
+    /*
+     * TYLKO użytkownik zmienia tę wartość.
      *
-     * true  = BIAŁE DÓŁ
-     * false = CZARNE DÓŁ
+     * true:
+     * BIAŁE DÓŁ
+     * Stockfish analizuje ruch białych.
+     *
+     * false:
+     * CZARNE DÓŁ
+     * Stockfish analizuje ruch czarnych.
      */
-    private var whiteAtBottom =
-        true
+    private var whiteAtBottom = true
 
     private val projectionCallback =
-        object :
-            MediaProjection.Callback() {
+        object : MediaProjection.Callback() {
 
             override fun onStop() {
 
@@ -157,14 +127,11 @@ class OverlayService : Service() {
                     "LIVE • przechwytywanie zatrzymane"
                 )
 
-                releaseCapture(
-                    false
-                )
+                releaseCapture(false)
             }
         }
 
     override fun onCreate() {
-
         super.onCreate()
 
         windowManager =
@@ -173,15 +140,12 @@ class OverlayService : Service() {
             ) as WindowManager
 
         engine =
-            StockfishEngine(
-                this
-            )
+            StockfishEngine(this)
 
         captureThread =
             HandlerThread(
                 "StockfishCapture"
             ).apply {
-
                 start()
             }
 
@@ -206,7 +170,6 @@ class OverlayService : Service() {
             intent?.action !=
             ACTION_START_LIVE
         ) {
-
             return START_NOT_STICKY
         }
 
@@ -216,11 +179,9 @@ class OverlayService : Service() {
                 Activity.RESULT_CANCELED
             )
 
-        val resultData:
-            Intent? =
+        val resultData: Intent? =
             if (
-                Build.VERSION.SDK_INT >=
-                33
+                Build.VERSION.SDK_INT >= 33
             ) {
 
                 intent.getParcelableExtra(
@@ -230,19 +191,14 @@ class OverlayService : Service() {
 
             } else {
 
-                @Suppress(
-                    "DEPRECATION"
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(
+                    EXTRA_RESULT_DATA
                 )
-
-                intent
-                    .getParcelableExtra(
-                        EXTRA_RESULT_DATA
-                    )
             }
 
         if (
-            resultCode !=
-            Activity.RESULT_OK ||
+            resultCode != Activity.RESULT_OK ||
             resultData == null
         ) {
 
@@ -264,29 +220,24 @@ class OverlayService : Service() {
     private fun startNotification() {
 
         val notification =
-            NotificationCompat
-                .Builder(
-                    this,
-                    "stockfish_live"
-                )
+            NotificationCompat.Builder(
+                this,
+                "stockfish_live"
+            )
                 .setSmallIcon(
-                    android.R.drawable
-                        .ic_menu_search
+                    android.R.drawable.ic_menu_search
                 )
                 .setContentTitle(
                     "Stockfish Overlay"
                 )
                 .setContentText(
-                    "Szybka analiza planszy"
+                    "Analiza treningowa aktywna"
                 )
-                .setOngoing(
-                    true
-                )
+                .setOngoing(true)
                 .build()
 
         if (
-            Build.VERSION.SDK_INT >=
-            29
+            Build.VERSION.SDK_INT >= 29
         ) {
 
             startForeground(
@@ -310,26 +261,21 @@ class OverlayService : Service() {
         data: Intent
     ) {
 
-        releaseCapture(
-            true
-        )
+        releaseCapture(true)
 
         recognizer.reset()
 
-        lastPlacement =
-            null
+        lastFrameTime = 0L
+        lastPlacement = null
 
-        candidatePlacement =
-            null
+        previousSignature = null
 
-        candidateCount =
-            0
+        lastBoardChangeTime =
+            System.currentTimeMillis()
 
-        previousSignature =
-            null
+        positionPending = true
 
-        lastFrameTime =
-            0L
+        lastRecognitionAttempt = 0L
 
         mainHandler.post {
 
@@ -348,15 +294,13 @@ class OverlayService : Service() {
         val manager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
-            ) as
-                MediaProjectionManager
+            ) as MediaProjectionManager
 
         val newProjection =
-            manager
-                .getMediaProjection(
-                    resultCode,
-                    data
-                )
+            manager.getMediaProjection(
+                resultCode,
+                data
+            )
 
         if (
             newProjection == null
@@ -372,24 +316,18 @@ class OverlayService : Service() {
         projection =
             newProjection
 
-        newProjection
-            .registerCallback(
-                projectionCallback,
-                captureHandler
-            )
+        newProjection.registerCallback(
+            projectionCallback,
+            captureHandler
+        )
 
         val metrics =
             DisplayMetrics()
 
-        @Suppress(
-            "DEPRECATION"
-        )
-
+        @Suppress("DEPRECATION")
         windowManager
             .defaultDisplay
-            .getRealMetrics(
-                metrics
-            )
+            .getRealMetrics(metrics)
 
         val width =
             metrics.widthPixels
@@ -401,31 +339,28 @@ class OverlayService : Service() {
             metrics.densityDpi
 
         val reader =
-            ImageReader
-                .newInstance(
-                    width,
-                    height,
-                    PixelFormat
-                        .RGBA_8888,
-                    2
-                )
+            ImageReader.newInstance(
+                width,
+                height,
+                PixelFormat.RGBA_8888,
+                2
+            )
 
         imageReader =
             reader
 
         virtualDisplay =
-            newProjection
-                .createVirtualDisplay(
-                    "StockfishCapture",
-                    width,
-                    height,
-                    density,
-                    DisplayManager
-                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    reader.surface,
-                    null,
-                    captureHandler
-                )
+            newProjection.createVirtualDisplay(
+                "StockfishCapture",
+                width,
+                height,
+                density,
+                DisplayManager
+                    .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.surface,
+                null,
+                captureHandler
+            )
 
         if (
             virtualDisplay == null
@@ -442,108 +377,97 @@ class OverlayService : Service() {
             "LIVE • szukam planszy..."
         )
 
-        reader
-            .setOnImageAvailableListener(
-                { source ->
+        reader.setOnImageAvailableListener(
+            { source ->
 
-                    val image =
-                        source
-                            .acquireLatestImage()
-                            ?: return@setOnImageAvailableListener
+                val image =
+                    source.acquireLatestImage()
+                        ?: return@setOnImageAvailableListener
 
-                    val now =
-                        System
-                            .currentTimeMillis()
+                val now =
+                    System.currentTimeMillis()
 
-                    if (
-                        now -
-                            lastFrameTime <
-                        FRAME_INTERVAL
-                    ) {
+                if (
+                    now - lastFrameTime <
+                    FRAME_INTERVAL
+                ) {
 
-                        image.close()
+                    image.close()
 
-                        return@setOnImageAvailableListener
-                    }
+                    return@setOnImageAvailableListener
+                }
 
-                    lastFrameTime =
-                        now
+                lastFrameTime =
+                    now
 
-                    try {
+                try {
 
-                        val plane =
-                            image.planes[0]
+                    val plane =
+                        image.planes[0]
 
-                        val buffer =
-                            plane.buffer
+                    val buffer =
+                        plane.buffer
 
-                        val pixelStride =
-                            plane.pixelStride
+                    val pixelStride =
+                        plane.pixelStride
 
-                        val rowStride =
-                            plane.rowStride
+                    val rowStride =
+                        plane.rowStride
 
-                        val rowPadding =
-                            rowStride -
-                                pixelStride *
-                                width
+                    val rowPadding =
+                        rowStride -
+                            pixelStride * width
 
-                        val bitmapWidth =
-                            width +
-                                rowPadding /
-                                pixelStride
+                    val bitmapWidth =
+                        width +
+                            rowPadding /
+                            pixelStride
 
-                        val padded =
-                            Bitmap
-                                .createBitmap(
-                                    bitmapWidth,
-                                    height,
-                                    Bitmap.Config
-                                        .ARGB_8888
-                                )
+                    val padded =
+                        Bitmap.createBitmap(
+                            bitmapWidth,
+                            height,
+                            Bitmap.Config.ARGB_8888
+                        )
 
-                        padded
-                            .copyPixelsFromBuffer(
-                                buffer
+                    padded.copyPixelsFromBuffer(
+                        buffer
+                    )
+
+                    val screen =
+                        Bitmap.createBitmap(
+                            padded,
+                            0,
+                            0,
+                            width,
+                            height
+                        )
+
+                    padded.recycle()
+
+                    processFrame(
+                        screen
+                    )
+
+                } catch (
+                    error: Throwable
+                ) {
+
+                    status(
+                        "LIVE • ERROR: " +
+                            (
+                                error.message
+                                    ?: error.javaClass.simpleName
                             )
+                    )
 
-                        val screen =
-                            Bitmap
-                                .createBitmap(
-                                    padded,
-                                    0,
-                                    0,
-                                    width,
-                                    height
-                                )
+                } finally {
 
-                        padded.recycle()
-
-                        processFrame(
-                            screen
-                        )
-
-                    } catch (
-                        error: Throwable
-                    ) {
-
-                        status(
-                            "LIVE • ERROR: " +
-                                (
-                                    error.message
-                                        ?: error
-                                            .javaClass
-                                            .simpleName
-                                    )
-                        )
-
-                    } finally {
-
-                        image.close()
-                    }
-                },
-                captureHandler
-            )
+                    image.close()
+                }
+            },
+            captureHandler
+        )
     }
 
     private fun processFrame(
@@ -552,22 +476,27 @@ class OverlayService : Service() {
 
         try {
 
+            val now =
+                System.currentTimeMillis()
+
             /*
-             * ETAP 1:
-             * bardzo szybki podpis planszy.
+             * Bardzo szybkie sprawdzenie obrazu.
              */
             val signature =
-                recognizer
-                    .quickSignature(
-                        bitmap
-                    )
+                recognizer.quickSignature(
+                    bitmap
+                )
 
+            /*
+             * Nie znaleziono planszy.
+             */
             if (
                 signature == null
             ) {
 
-                previousSignature =
-                    null
+                previousSignature = null
+
+                positionPending = true
 
                 status(
                     "LIVE • szukam planszy..."
@@ -576,76 +505,107 @@ class OverlayService : Service() {
                 return
             }
 
-            val oldSignature =
+            val previous =
                 previousSignature
 
             previousSignature =
                 signature
 
             /*
-             * Pierwsza klatka.
-             *
-             * Od razu robimy pełne
-             * rozpoznanie, żeby użytkownik
-             * nie musiał wykonywać ruchu.
+             * Pierwsza klatka z planszą.
              */
             if (
-                oldSignature == null
+                previous == null
             ) {
 
-                recognizePosition(
-                    bitmap
+                positionPending = true
+
+                lastBoardChangeTime =
+                    now - DEBOUNCE_MS
+
+                tryRecognizePosition(
+                    bitmap,
+                    now
                 )
 
                 return
             }
 
+            /*
+             * Jak bardzo zmieniła się plansza.
+             */
             val difference =
-                recognizer
-                    .signatureDifference(
-                        oldSignature,
-                        signature
-                    )
+                recognizer.signatureDifference(
+                    previous,
+                    signature
+                )
 
             /*
-             * Brak istotnej zmiany.
+             * Wykryliśmy zmianę.
+             *
+             * Resetujemy timer debounce.
              */
             if (
-                difference <
+                difference >=
                 CHANGE_THRESHOLD
             ) {
 
-                if (
-                    lastPlacement != null
-                ) {
+                lastBoardChangeTime =
+                    now
 
-                    status(
-                        if (
-                            whiteAtBottom
-                        ) {
+                positionPending =
+                    true
 
-                            "LIVE • gotowy • BIAŁE DÓŁ"
-
-                        } else {
-
-                            "LIVE • gotowy • CZARNE DÓŁ"
-                        }
-                    )
-                }
+                status(
+                    "LIVE • wykryto zmianę"
+                )
 
                 return
             }
 
             /*
-             * Plansza naprawdę się zmieniła.
+             * Nic się już nie zmienia.
+             *
+             * Jeżeli wcześniej wykryliśmy ruch
+             * i minęło 300 ms, rozpoznajemy
+             * pełną pozycję.
              */
-            status(
-                "LIVE • wykryto ruch..."
-            )
+            if (
+                positionPending &&
+                now -
+                    lastBoardChangeTime >=
+                DEBOUNCE_MS
+            ) {
 
-            recognizePosition(
-                bitmap
-            )
+                tryRecognizePosition(
+                    bitmap,
+                    now
+                )
+
+                return
+            }
+
+            /*
+             * Normalny stan oczekiwania.
+             */
+            if (
+                !positionPending &&
+                lastPlacement != null
+            ) {
+
+                status(
+                    if (
+                        whiteAtBottom
+                    ) {
+
+                        "LIVE • gotowy • BIAŁE DÓŁ"
+
+                    } else {
+
+                        "LIVE • gotowy • CZARNE DÓŁ"
+                    }
+                )
+            }
 
         } finally {
 
@@ -658,16 +618,52 @@ class OverlayService : Service() {
         }
     }
 
-    private fun recognizePosition(
-        bitmap: Bitmap
+    private fun tryRecognizePosition(
+        bitmap: Bitmap,
+        now: Long
     ) {
 
+        /*
+         * Jeżeli poprzednia próba była błędna,
+         * nie wykonujemy następnej co 1 ms.
+         */
+        if (
+            now -
+                lastRecognitionAttempt <
+            RETRY_MS
+        ) {
+
+            return
+        }
+
+        lastRecognitionAttempt =
+            now
+
+        status(
+            "LIVE • rozpoznaję pozycję..."
+        )
+
         val result =
-            recognizer
-                .recognize(
-                    bitmap
-                )
-                ?: return
+            recognizer.recognize(
+                bitmap
+            )
+
+        /*
+         * Plansza chwilowo źle rozpoznana.
+         *
+         * Zostawiamy positionPending = true,
+         * więc spróbujemy ponownie.
+         */
+        if (
+            result == null
+        ) {
+
+            status(
+                "LIVE • ponawiam rozpoznanie..."
+            )
+
+            return
+        }
 
         if (
             !isPlausiblePosition(
@@ -675,110 +671,56 @@ class OverlayService : Service() {
             )
         ) {
 
-            /*
-             * Prawdopodobnie trafiliśmy
-             * w animację ruchu.
-             *
-             * Po 250 ms spróbujemy ponownie.
-             */
-            candidatePlacement =
-                null
-
-            candidateCount =
-                0
-
             status(
-                "LIVE • stabilizuję planszę..."
+                "LIVE • ponawiam figury..."
             )
 
             return
         }
 
         /*
-         * Pierwsza pozycja po uruchomieniu
-         * może zostać zatwierdzona od razu.
-         */
-        if (
-            lastPlacement == null
-        ) {
-
-            acceptPosition(
-                result
-            )
-
-            return
-        }
-
-        /*
-         * To nadal poprzednia pozycja.
+         * To dokładnie ta sama pozycja.
+         *
+         * Nie odpalamy Stockfisha drugi raz.
          */
         if (
             result.boardFen ==
             lastPlacement
         ) {
 
-            candidatePlacement =
-                null
+            positionPending =
+                false
 
-            candidateCount =
-                0
+            showBoardOverlay(
+                result.area
+            )
+
+            status(
+                if (
+                    whiteAtBottom
+                ) {
+
+                    "LIVE • gotowy • BIAŁE DÓŁ"
+
+                } else {
+
+                    "LIVE • gotowy • CZARNE DÓŁ"
+                }
+            )
 
             return
         }
 
         /*
-         * Nowa pozycja.
+         * Mamy NOWĄ poprawną pozycję.
          *
-         * Musimy zobaczyć ją dwa razy,
-         * żeby nie zatwierdzić klatki
-         * z animacji.
+         * Od razu ją zatwierdzamy.
          */
-        if (
-            candidatePlacement ==
-            result.boardFen
-        ) {
-
-            candidateCount++
-
-        } else {
-
-            candidatePlacement =
-                result.boardFen
-
-            candidateCount =
-                1
-        }
-
-        status(
-            "LIVE • potwierdzam ruch " +
-                "$candidateCount/" +
-                REQUIRED_CONFIRMATIONS
-        )
-
-        if (
-            candidateCount >=
-            REQUIRED_CONFIRMATIONS
-        ) {
-
-            acceptPosition(
-                result
-            )
-
-            candidatePlacement =
-                null
-
-            candidateCount =
-                0
-        }
-    }
-
-    private fun acceptPosition(
-        result:
-            BoardRecognizer.Result
-    ) {
-
         lastPlacement =
             result.boardFen
+
+        positionPending =
+            false
 
         showBoardOverlay(
             result.area
@@ -794,17 +736,16 @@ class OverlayService : Service() {
     ) {
 
         if (
-            analysing
-                .getAndSet(
-                    true
-                )
+            analysing.getAndSet(
+                true
+            )
         ) {
 
             return
         }
 
         /*
-         * Użytkownik sam wybiera kolor.
+         * Użytkownik wybiera stronę.
          */
         val side =
             if (
@@ -840,117 +781,106 @@ class OverlayService : Service() {
                 }
         }
 
-        engine
-            .analyzeFen(
-                fen,
-                13
-            ) { result ->
+        engine.analyzeFen(
+            fen,
+            13
+        ) { result ->
 
-                analysing.set(
-                    false
-                )
+            analysing.set(
+                false
+            )
 
-                mainHandler.post {
+            mainHandler.post {
 
-                    if (
-                        result.error !=
-                        null
-                    ) {
-
-                        analysisText?.text =
-                            "BŁĄD:\n" +
-                                result.error
-
-                        status(
-                            "LIVE • błąd analizy"
-                        )
-
-                        return@post
-                    }
+                if (
+                    result.error != null
+                ) {
 
                     analysisText?.text =
-                        buildString {
-
-                            append(
-                                if (
-                                    whiteAtBottom
-                                ) {
-
-                                    "GRAM: BIAŁE\n"
-
-                                } else {
-
-                                    "GRAM: CZARNE\n"
-                                }
-                            )
-
-                            append(
-                                "Ocena: " +
-                                    result.evaluation +
-                                    "\n"
-                            )
-
-                            result.moves
-                                .take(5)
-                                .forEachIndexed {
-                                    index,
-                                    move ->
-
-                                    append(
-                                        "${index + 1}. $move"
-                                    )
-
-                                    if (
-                                        index <
-                                        4
-                                    ) {
-
-                                        append(
-                                            "\n"
-                                        )
-                                    }
-                                }
-                        }
-
-                    var evaluation =
-                        result
-                            .evaluation
-                            .toDoubleOrNull()
-
-                    if (
-                        evaluation !=
-                        null &&
-                        !whiteAtBottom
-                    ) {
-
-                        evaluation =
-                            -evaluation
-                    }
-
-                    boardOverlay
-                        ?.whiteAtBottom =
-                        whiteAtBottom
-
-                    boardOverlay
-                        ?.update(
-                            evaluation,
-                            result.moves
-                        )
+                        "BŁĄD:\n" +
+                            result.error
 
                     status(
-                        if (
-                            whiteAtBottom
-                        ) {
-
-                            "LIVE • gotowy • BIAŁE DÓŁ"
-
-                        } else {
-
-                            "LIVE • gotowy • CZARNE DÓŁ"
-                        }
+                        "LIVE • błąd analizy"
                     )
+
+                    return@post
                 }
+
+                analysisText?.text =
+                    buildString {
+
+                        append(
+                            if (
+                                whiteAtBottom
+                            ) {
+
+                                "GRAM: BIAŁE\n"
+
+                            } else {
+
+                                "GRAM: CZARNE\n"
+                            }
+                        )
+
+                        append(
+                            "Ocena: ${result.evaluation}\n"
+                        )
+
+                        result.moves
+                            .take(5)
+                            .forEachIndexed {
+                                index,
+                                move ->
+
+                                append(
+                                    "${index + 1}. $move"
+                                )
+
+                                if (
+                                    index < 4
+                                ) {
+
+                                    append("\n")
+                                }
+                            }
+                    }
+
+                var evaluation =
+                    result.evaluation
+                        .toDoubleOrNull()
+
+                if (
+                    evaluation != null &&
+                    !whiteAtBottom
+                ) {
+
+                    evaluation =
+                        -evaluation
+                }
+
+                boardOverlay?.whiteAtBottom =
+                    whiteAtBottom
+
+                boardOverlay?.update(
+                    evaluation,
+                    result.moves
+                )
+
+                status(
+                    if (
+                        whiteAtBottom
+                    ) {
+
+                        "LIVE • gotowy • BIAŁE DÓŁ"
+
+                    } else {
+
+                        "LIVE • gotowy • CZARNE DÓŁ"
+                    }
+                )
             }
+        }
     }
 
     private fun isPlausiblePosition(
@@ -958,9 +888,7 @@ class OverlayService : Service() {
     ): Boolean {
 
         val rows =
-            placement.split(
-                "/"
-            )
+            placement.split("/")
 
         if (
             rows.size != 8
@@ -969,21 +897,15 @@ class OverlayService : Service() {
             return false
         }
 
-        var whiteKing =
-            0
-
-        var blackKing =
-            0
-
-        var pieces =
-            0
+        var whiteKing = 0
+        var blackKing = 0
+        var pieces = 0
 
         for (
             row in rows
         ) {
 
-            var squares =
-                0
+            var squares = 0
 
             for (
                 char in row
@@ -994,8 +916,7 @@ class OverlayService : Service() {
                 ) {
 
                     squares +=
-                        char
-                            .digitToInt()
+                        char.digitToInt()
 
                     continue
                 }
@@ -1007,13 +928,11 @@ class OverlayService : Service() {
                 ) {
 
                     'K' -> {
-
                         whiteKing++
                         pieces++
                     }
 
                     'k' -> {
-
                         blackKing++
                         pieces++
                     }
@@ -1028,12 +947,10 @@ class OverlayService : Service() {
                     'b',
                     'n',
                     'p' -> {
-
                         pieces++
                     }
 
                     else -> {
-
                         return false
                     }
                 }
@@ -1051,12 +968,11 @@ class OverlayService : Service() {
             whiteKing == 1 &&
                 blackKing == 1 &&
                 pieces in 2..32
-            )
+        )
     }
 
     private fun showBoardOverlay(
-        area:
-            BoardRecognizer.BoardArea
+        area: BoardRecognizer.BoardArea
     ) {
 
         mainHandler.post {
@@ -1099,33 +1015,26 @@ class OverlayService : Service() {
                 val params =
                     view.layoutParams
                         as?
-                        WindowManager
-                            .LayoutParams
+                        WindowManager.LayoutParams
 
                 if (
                     params == null
                 ) {
 
                     val newParams =
-                        WindowManager
-                            .LayoutParams(
-                                area.size,
-                                area.size,
+                        WindowManager.LayoutParams(
+                            area.size,
+                            area.size,
+                            WindowManager.LayoutParams
+                                .TYPE_APPLICATION_OVERLAY,
 
-                                WindowManager
-                                    .LayoutParams
-                                    .TYPE_APPLICATION_OVERLAY,
+                            WindowManager.LayoutParams
+                                .FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams
+                                    .FLAG_NOT_TOUCHABLE,
 
-                                WindowManager
-                                    .LayoutParams
-                                    .FLAG_NOT_FOCUSABLE or
-                                    WindowManager
-                                        .LayoutParams
-                                        .FLAG_NOT_TOUCHABLE,
-
-                                PixelFormat
-                                    .TRANSLUCENT
-                            )
+                            PixelFormat.TRANSLUCENT
+                        )
 
                     newParams.gravity =
                         Gravity.TOP or
@@ -1137,11 +1046,10 @@ class OverlayService : Service() {
                     newParams.y =
                         correctedTop
 
-                    windowManager
-                        .addView(
-                            view,
-                            newParams
-                        )
+                    windowManager.addView(
+                        view,
+                        newParams
+                    )
 
                 } else {
 
@@ -1157,11 +1065,10 @@ class OverlayService : Service() {
                     params.height =
                         area.size
 
-                    windowManager
-                        .updateViewLayout(
-                            view,
-                            params
-                        )
+                    windowManager.updateViewLayout(
+                        view,
+                        params
+                    )
                 }
 
             } catch (
@@ -1183,10 +1090,9 @@ class OverlayService : Service() {
 
         runCatching {
 
-            windowManager
-                .removeView(
-                    view
-                )
+            windowManager.removeView(
+                view
+            )
         }
 
         boardOverlay =
@@ -1196,13 +1102,10 @@ class OverlayService : Service() {
     private fun createInfoOverlay() {
 
         val root =
-            LinearLayout(
-                this
-            ).apply {
+            LinearLayout(this).apply {
 
                 orientation =
-                    LinearLayout
-                        .VERTICAL
+                    LinearLayout.VERTICAL
 
                 setPadding(
                     14,
@@ -1212,15 +1115,12 @@ class OverlayService : Service() {
                 )
 
                 setBackgroundColor(
-                    0xC0181818
-                        .toInt()
+                    0xC0181818.toInt()
                 )
             }
 
         statusText =
-            TextView(
-                this
-            ).apply {
+            TextView(this).apply {
 
                 text =
                     "LIVE • oczekiwanie"
@@ -1229,15 +1129,12 @@ class OverlayService : Service() {
                     14f
 
                 setTextColor(
-                    0xFFFFFFFF
-                        .toInt()
+                    0xFFFFFFFF.toInt()
                 )
             }
 
         analysisText =
-            TextView(
-                this
-            ).apply {
+            TextView(this).apply {
 
                 text =
                     "Czekam na planszę..."
@@ -1246,15 +1143,12 @@ class OverlayService : Service() {
                     12f
 
                 setTextColor(
-                    0xFFFFFFFF
-                        .toInt()
+                    0xFFFFFFFF.toInt()
                 )
             }
 
         sideButton =
-            Button(
-                this
-            ).apply {
+            Button(this).apply {
 
                 text =
                     "BIAŁE DÓŁ"
@@ -1262,6 +1156,9 @@ class OverlayService : Service() {
                 textSize =
                     11f
 
+                /*
+                 * Tylko użytkownik zmienia orientację.
+                 */
                 setOnClickListener {
 
                     whiteAtBottom =
@@ -1304,47 +1201,31 @@ class OverlayService : Service() {
         )
 
         val params =
-            WindowManager
-                .LayoutParams(
-                    430,
+            WindowManager.LayoutParams(
+                430,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
 
-                    WindowManager
-                        .LayoutParams
-                        .WRAP_CONTENT,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
 
-                    WindowManager
-                        .LayoutParams
-                        .TYPE_APPLICATION_OVERLAY,
-
-                    WindowManager
-                        .LayoutParams
-                        .FLAG_NOT_FOCUSABLE or
-                        WindowManager
-                            .LayoutParams
-                            .FLAG_NOT_TOUCH_MODAL,
-
-                    PixelFormat
-                        .TRANSLUCENT
-                )
+                PixelFormat.TRANSLUCENT
+            )
 
         params.gravity =
             Gravity.TOP or
                 Gravity.START
 
-        params.x =
-            20
-
-        params.y =
-            75
+        params.x = 20
+        params.y = 75
 
         infoOverlay =
             root
 
-        windowManager
-            .addView(
-                root,
-                params
-            )
+        windowManager.addView(
+            root,
+            params
+        )
     }
 
     private fun updateSideButton() {
@@ -1390,16 +1271,14 @@ class OverlayService : Service() {
             NotificationChannel(
                 "stockfish_live",
                 "Stockfish LIVE",
-                NotificationManager
-                    .IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_LOW
             )
 
         getSystemService(
             NotificationManager::class.java
+        ).createNotificationChannel(
+            channel
         )
-            .createNotificationChannel(
-                channel
-            )
     }
 
     private fun releaseCapture(
@@ -1416,28 +1295,21 @@ class OverlayService : Service() {
         }
 
         runCatching {
-
-            imageReader
-                ?.close()
+            imageReader?.close()
         }
 
-        imageReader =
-            null
+        imageReader = null
 
         runCatching {
-
-            virtualDisplay
-                ?.release()
+            virtualDisplay?.release()
         }
 
-        virtualDisplay =
-            null
+        virtualDisplay = null
 
         val old =
             projection
 
-        projection =
-            null
+        projection = null
 
         if (
             old != null
@@ -1455,7 +1327,6 @@ class OverlayService : Service() {
             ) {
 
                 runCatching {
-
                     old.stop()
                 }
             }
@@ -1464,12 +1335,9 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
 
-        releaseCapture(
-            true
-        )
+        releaseCapture(true)
 
         runCatching {
-
             engine.shutdown()
         }
 
@@ -1477,30 +1345,23 @@ class OverlayService : Service() {
 
             removeBoardOverlay()
 
-            infoOverlay
-                ?.let {
+            infoOverlay?.let {
 
-                    runCatching {
+                runCatching {
 
-                        windowManager
-                            .removeView(
-                                it
-                            )
-                    }
+                    windowManager.removeView(
+                        it
+                    )
                 }
+            }
 
-            infoOverlay =
-                null
+            infoOverlay = null
         }
 
-        captureThread
-            ?.quitSafely()
+        captureThread?.quitSafely()
 
-        captureThread =
-            null
-
-        captureHandler =
-            null
+        captureThread = null
+        captureHandler = null
 
         super.onDestroy()
     }
