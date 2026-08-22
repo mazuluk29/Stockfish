@@ -105,6 +105,9 @@ class OverlayService : Service() {
 
         if (intent?.action == ACTION_START_LIVE) {
 
+            statusText?.text =
+                "LIVE • zgoda odebrana"
+
             val resultCode =
                 intent.getIntExtra(
                     EXTRA_RESULT_CODE,
@@ -203,6 +206,11 @@ class OverlayService : Service() {
 
         releaseCaptureResources()
 
+        statusText?.post {
+            statusText?.text =
+                "LIVE • tworzę MediaProjection"
+        }
+
         val manager =
             getSystemService(
                 MEDIA_PROJECTION_SERVICE
@@ -214,12 +222,27 @@ class OverlayService : Service() {
                 data
             )
 
+        if (projection == null) {
+
+            statusText?.post {
+                statusText?.text =
+                    "LIVE • błąd MediaProjection"
+            }
+
+            return
+        }
+
         mediaProjection = projection
 
         projection.registerCallback(
             projectionCallback,
             captureHandler
         )
+
+        statusText?.post {
+            statusText?.text =
+                "LIVE • MediaProjection OK"
+        }
 
         val metrics =
             DisplayMetrics()
@@ -228,9 +251,14 @@ class OverlayService : Service() {
         windowManager.defaultDisplay
             .getRealMetrics(metrics)
 
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
+        val width =
+            metrics.widthPixels
+
+        val height =
+            metrics.heightPixels
+
+        val density =
+            metrics.densityDpi
 
         imageReader =
             ImageReader.newInstance(
@@ -253,6 +281,21 @@ class OverlayService : Service() {
                 captureHandler
             )
 
+        if (virtualDisplay == null) {
+
+            statusText?.post {
+                statusText?.text =
+                    "LIVE • błąd VirtualDisplay"
+            }
+
+            return
+        }
+
+        statusText?.post {
+            statusText?.text =
+                "LIVE • VirtualDisplay OK"
+        }
+
         imageReader!!
             .setOnImageAvailableListener(
                 { reader ->
@@ -264,15 +307,11 @@ class OverlayService : Service() {
                     val now =
                         System.currentTimeMillis()
 
-                    /*
-                     * Bardzo ważne:
-                     * nie tworzymy Bitmapy dla każdej
-                     * klatki ekranu.
-                     */
                     if (
                         now - lastCapturedFrame <
                         CAPTURE_INTERVAL
                     ) {
+
                         image.close()
                         return@setOnImageAvailableListener
                     }
@@ -281,504 +320,10 @@ class OverlayService : Service() {
 
                     try {
 
-                        val plane =
-                            image.planes[0]
-
-                        val buffer =
-                            plane.buffer
-
-                        val pixelStride =
-                            plane.pixelStride
-
-                        val rowStride =
-                            plane.rowStride
-
-                        val rowPadding =
-                            rowStride -
-                                pixelStride * width
-
-                        val bitmapWidth =
-                            width +
-                                rowPadding /
-                                pixelStride
-
-                        val fullBitmap =
-                            Bitmap.createBitmap(
-                                bitmapWidth,
-                                height,
-                                Bitmap.Config.ARGB_8888
-                            )
-
-                        fullBitmap
-                            .copyPixelsFromBuffer(buffer)
-
-                        val screenBitmap =
-                            Bitmap.createBitmap(
-                                fullBitmap,
-                                0,
-                                0,
-                                width,
-                                height
-                            )
-
-                        fullBitmap.recycle()
-
-                        processFrame(
-                            screenBitmap
-                        )
-
-                    } catch (e: Exception) {
-
                         statusText?.post {
                             statusText?.text =
-                                "LIVE • błąd: ${e.message}"
+                                "LIVE • klatka odebrana"
                         }
 
-                    } finally {
-
-                        image.close()
-                    }
-
-                },
-                captureHandler
-            )
-
-        tracker.reset()
-        position.reset()
-
-        statusText?.post {
-            statusText?.text =
-                "LIVE • szukam planszy..."
-        }
-
-        analyseCurrentPosition()
-    }
-
-    private fun processFrame(
-        bitmap: Bitmap
-    ) {
-
-        try {
-
-            val changed =
-                tracker.process(bitmap)
-
-            val area =
-                tracker.getBoardArea()
-
-            if (area != null) {
-
-                statusText?.post {
-
-                    if (
-                        changed == null ||
-                        changed.isEmpty()
-                    ) {
-
-                        statusText?.text =
-                            "LIVE • plansza wykryta"
-                    }
-                }
-
-                evalBar?.post {
-
-                    val bar =
-                        evalBar
-                            ?: return@post
-
-                    val params =
-                        bar.layoutParams
-                            as? WindowManager.LayoutParams
-                            ?: return@post
-
-                    params.x = area.left
-                    params.y = area.top
-                    params.height = area.size
-
-                    try {
-
-                        windowManager
-                            .updateViewLayout(
-                                bar,
-                                params
-                            )
-
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-
-            if (
-                changed == null ||
-                changed.size < 2
-            ) {
-                return
-            }
-
-            val now =
-                System.currentTimeMillis()
-
-            /*
-             * Ochrona przed wykryciem tej samej
-             * animacji ruchu kilka razy.
-             */
-            if (
-                now - lastMoveTime <
-                1000
-            ) {
-                return
-            }
-
-            val move =
-                inferMove(changed)
-                    ?: return
-
-            if (
-                position.applyMove(move)
-            ) {
-
-                lastMoveTime = now
-
-                statusText?.post {
-                    statusText?.text =
-                        "LIVE • $move"
-                }
-
-                analyseCurrentPosition()
-            }
-
-        } finally {
-
-            bitmap.recycle()
-        }
-    }
-
-    private fun inferMove(
-        changed: List<String>
-    ): String? {
-
-        val ownSquares =
-            changed.filter {
-                position.isOwnPiece(it)
-            }
-
-        if (ownSquares.isEmpty()) {
-            return null
-        }
-
-        for (from in ownSquares) {
-
-            for (to in changed) {
-
-                if (from == to) {
-                    continue
-                }
-
-                val piece =
-                    position.pieceAt(from)
-
-                if (
-                    piece.uppercaseChar() == 'P'
-                ) {
-
-                    val rank = to[1]
-
-                    if (
-                        rank == '1' ||
-                        rank == '8'
-                    ) {
-
-                        return "${from}${to}q"
-                    }
-                }
-
-                return "$from$to"
-            }
-        }
-
-        return null
-    }
-
-    private fun analyseCurrentPosition() {
-
-        if (analysing.getAndSet(true)) {
-            return
-        }
-
-        val fen =
-            position.toFen()
-
-        engine.analyzeFen(
-            fen,
-            12
-        ) { result ->
-
-            analysing.set(false)
-
-            movesText?.post {
-
-                if (result.error != null) {
-
-                    movesText?.text =
-                        "Stockfish: ${result.error}"
-
-                    return@post
-                }
-
-                movesText?.text =
-                    buildString {
-
-                        append(
-                            "Ocena: ${result.evaluation}\n"
-                        )
-
-                        result.moves
-                            .take(5)
-                            .forEachIndexed {
-                                    index,
-                                    move ->
-
-                                append(
-                                    "${index + 1}. $move\n"
-                                )
-                            }
-                    }
-
-                var value =
-                    result.evaluation
-                        .toDoubleOrNull()
-
-                if (
-                    value != null &&
-                    !position.whiteToMove
-                ) {
-
-                    value = -value
-                }
-
-                if (value != null) {
-
-                    evalBar
-                        ?.setEvaluation(value)
-                }
-            }
-        }
-    }
-
-    private fun createOverlay() {
-
-        val controls =
-            LinearLayout(this).apply {
-
-                orientation =
-                    LinearLayout.VERTICAL
-
-                setPadding(
-                    18,
-                    12,
-                    18,
-                    12
-                )
-
-                setBackgroundColor(
-                    0xCC181818.toInt()
-                )
-            }
-
-        statusText =
-            TextView(this).apply {
-
-                text =
-                    "LIVE • oczekiwanie"
-
-                textSize = 16f
-
-                setTextColor(
-                    0xFFFFFFFF.toInt()
-                )
-            }
-
-        movesText =
-            TextView(this).apply {
-
-                text =
-                    "Stockfish gotowy"
-
-                textSize = 15f
-
-                setTextColor(
-                    0xFFFFFFFF.toInt()
-                )
-            }
-
-        controls.addView(statusText)
-        controls.addView(movesText)
-
-        val type =
-            if (
-                Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.O
-            ) {
-
-                WindowManager.LayoutParams
-                    .TYPE_APPLICATION_OVERLAY
-
-            } else {
-
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams
-                    .TYPE_PHONE
-            }
-
-        val controlParams =
-            WindowManager.LayoutParams(
-                420,
-                WindowManager.LayoutParams
-                    .WRAP_CONTENT,
-                type,
-                WindowManager.LayoutParams
-                    .FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams
-                        .FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT
-            )
-
-        controlParams.gravity =
-            Gravity.TOP or Gravity.START
-
-        controlParams.x = 20
-        controlParams.y = 80
-
-        panel = controls
-
-        windowManager.addView(
-            controls,
-            controlParams
-        )
-
-        val bar =
-            EvalBarView(this)
-
-        val barParams =
-            WindowManager.LayoutParams(
-                22,
-                400,
-                type,
-                WindowManager.LayoutParams
-                    .FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams
-                        .FLAG_NOT_TOUCHABLE,
-                PixelFormat.TRANSLUCENT
-            )
-
-        barParams.gravity =
-            Gravity.TOP or Gravity.START
-
-        barParams.x = 0
-        barParams.y = 400
-
-        evalBar = bar
-
-        windowManager.addView(
-            bar,
-            barParams
-        )
-    }
-
-    private fun createChannel() {
-
-        if (Build.VERSION.SDK_INT >= 26) {
-
-            val channel =
-                NotificationChannel(
-                    "live",
-                    "Stockfish LIVE",
-                    NotificationManager
-                        .IMPORTANCE_LOW
-                )
-
-            getSystemService(
-                NotificationManager::class.java
-            )
-                .createNotificationChannel(
-                    channel
-                )
-        }
-    }
-
-    private fun releaseCaptureResources() {
-
-        try {
-            imageReader
-                ?.setOnImageAvailableListener(
-                    null,
-                    null
-                )
-        } catch (_: Exception) {
-        }
-
-        try {
-            imageReader?.close()
-        } catch (_: Exception) {
-        }
-
-        imageReader = null
-
-        try {
-            virtualDisplay?.release()
-        } catch (_: Exception) {
-        }
-
-        virtualDisplay = null
-
-        mediaProjection?.let { projection ->
-
-            try {
-                projection.unregisterCallback(
-                    projectionCallback
-                )
-            } catch (_: Exception) {
-            }
-
-            try {
-                projection.stop()
-            } catch (_: Exception) {
-            }
-        }
-
-        mediaProjection = null
-    }
-
-    override fun onDestroy() {
-
-        releaseCaptureResources()
-
-        engine.shutdown()
-
-        panel?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {
-            }
-        }
-
-        evalBar?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {
-            }
-        }
-
-        captureThread
-            ?.quitSafely()
-
-        captureThread = null
-        captureHandler = null
-
-        super.onDestroy()
-    }
-
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? = null
-}
+                        val plane =
+                            image.planes
