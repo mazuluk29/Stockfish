@@ -21,6 +21,7 @@ import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
@@ -33,14 +34,13 @@ class OverlayService : Service() {
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 
-        private const val FRAME_INTERVAL = 700L
+        private const val FRAME_INTERVAL = 1200L
     }
 
     private lateinit var windowManager: WindowManager
     private lateinit var engine: StockfishEngine
 
-    private val tracker = BoardTracker()
-    private val position = ChessPosition()
+    private val recognizer = BoardRecognizer()
 
     private val mainHandler =
         Handler(Looper.getMainLooper())
@@ -57,11 +57,25 @@ class OverlayService : Service() {
 
     private var statusText: TextView? = null
     private var analysisText: TextView? = null
+    private var sideButton: Button? = null
 
     private var lastFrameTime = 0L
-    private var lastMoveTime = 0L
 
-    private var boardWasLocked = false
+    private var lastPlacement: String? = null
+
+    /*
+     * true  = białe na ruchu
+     * false = czarne na ruchu
+     *
+     * Po każdym rozpoznanym nowym ustawieniu
+     * automatycznie zmieniamy stronę.
+     *
+     * Przycisk w overlayu pozwala to poprawić
+     * ręcznie w dowolnym momencie.
+     */
+    private var whiteToMove = true
+
+    private var currentWhiteAtBottom = true
 
     private val analysing =
         AtomicBoolean(false)
@@ -148,7 +162,7 @@ class OverlayService : Service() {
         ) {
 
             status(
-                "LIVE • brak zgody"
+                "LIVE • brak zgody na ekran"
             )
 
             return START_NOT_STICKY
@@ -176,7 +190,7 @@ class OverlayService : Service() {
                     "Stockfish Overlay"
                 )
                 .setContentText(
-                    "Analiza treningowa aktywna"
+                    "Analiza planszy aktywna"
                 )
                 .setOngoing(true)
                 .build()
@@ -206,31 +220,19 @@ class OverlayService : Service() {
 
         releaseCapture(true)
 
-        tracker.reset()
-        position.reset()
-
-        boardWasLocked = false
-
+        lastPlacement = null
         lastFrameTime = 0L
-        lastMoveTime = 0L
 
         mainHandler.post {
 
             analysisText?.text =
                 "Czekam na planszę..."
 
-            boardOverlay?.let {
-
-                runCatching {
-                    windowManager.removeView(it)
-                }
-            }
-
-            boardOverlay = null
+            removeBoardOverlay()
         }
 
         status(
-            "LIVE • uruchamianie"
+            "LIVE • uruchamianie..."
         )
 
         val manager =
@@ -290,18 +292,17 @@ class OverlayService : Service() {
             reader
 
         virtualDisplay =
-            newProjection
-                .createVirtualDisplay(
-                    "StockfishCapture",
-                    width,
-                    height,
-                    density,
-                    DisplayManager
-                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    reader.surface,
-                    null,
-                    captureHandler
-                )
+            newProjection.createVirtualDisplay(
+                "StockfishCapture",
+                width,
+                height,
+                density,
+                DisplayManager
+                    .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.surface,
+                null,
+                captureHandler
+            )
 
         if (virtualDisplay == null) {
 
@@ -383,27 +384,14 @@ class OverlayService : Service() {
 
                     padded.recycle()
 
-                    try {
-
-                        processFrame(
-                            screen
-                        )
-
-                    } catch (error: Throwable) {
-
-                        status(
-                            "LIVE • FRAME ERROR: " +
-                                (
-                                    error.message
-                                        ?: error.javaClass.simpleName
-                                )
-                        )
-                    }
+                    processFrame(
+                        screen
+                    )
 
                 } catch (error: Throwable) {
 
                     status(
-                        "LIVE • CAPTURE ERROR: " +
+                        "LIVE • ERROR: " +
                             (
                                 error.message
                                     ?: error.javaClass.simpleName
@@ -425,127 +413,98 @@ class OverlayService : Service() {
 
         try {
 
-            val changed =
-                tracker.process(
+            val result =
+                recognizer.recognize(
                     bitmap
                 )
 
-            val area =
-                tracker.boardArea()
-
             /*
-             * BRAK PRAWDZIWEJ PLANSZY.
+             * Nic przypominającego prawidłową
+             * szachownicę nie znaleziono.
              */
-            if (
-                area == null ||
-                !tracker.isLocked
-            ) {
-
-                if (boardWasLocked) {
-
-                    boardWasLocked =
-                        false
-
-                    position.reset()
-
-                    analysing.set(false)
-
-                    mainHandler.post {
-
-                        analysisText?.text =
-                            "Czekam na planszę..."
-
-                        boardOverlay?.let {
-
-                            runCatching {
-                                windowManager
-                                    .removeView(it)
-                            }
-                        }
-
-                        boardOverlay =
-                            null
-                    }
-                }
+            if (result == null) {
 
                 status(
                     "LIVE • szukam planszy..."
                 )
 
+                lastPlacement =
+                    null
+
+                mainHandler.post {
+
+                    analysisText?.text =
+                        "Czekam na planszę..."
+
+                    removeBoardOverlay()
+                }
+
                 return
             }
 
             /*
-             * WŁAŚNIE WYKRYTO STABILNĄ PLANSZĘ.
+             * Dodatkowa kontrola poprawności FEN.
              */
-            if (!boardWasLocked) {
-
-                boardWasLocked =
-                    true
-
-                position.reset()
-
-                lastMoveTime =
-                    System.currentTimeMillis()
+            if (
+                !isPlausiblePosition(
+                    result.boardFen
+                )
+            ) {
 
                 status(
-                    "LIVE • plansza zablokowana"
+                    "LIVE • plansza znaleziona, rozpoznaję figury..."
                 )
-
-                showBoardOverlayOnMain(
-                    area
-                )
-
-                analysePosition()
 
                 return
             }
 
-            showBoardOverlayOnMain(
-                area
-            )
+            currentWhiteAtBottom =
+                result.whiteAtBottom
 
             status(
-                "LIVE • plansza OK"
+                if (result.whiteAtBottom) {
+                    "LIVE • plansza OK • białe na dole"
+                } else {
+                    "LIVE • plansza OK • czarne na dole"
+                }
             )
 
+            showBoardOverlay(
+                result.area,
+                result.whiteAtBottom
+            )
+
+            val previous =
+                lastPlacement
+
+            /*
+             * Pozycja nie zmieniła się.
+             * Nie ma sensu ponownie odpalać Stockfisha.
+             */
             if (
-                changed == null ||
-                changed.size < 2
+                previous ==
+                result.boardFen
             ) {
                 return
             }
 
-            val now =
-                System.currentTimeMillis()
+            /*
+             * Jeżeli mieliśmy poprzednią pozycję,
+             * oznacza to najczęściej wykonanie ruchu.
+             */
+            if (previous != null) {
+                whiteToMove =
+                    !whiteToMove
 
-            if (
-                now - lastMoveTime <
-                1000L
-            ) {
-                return
+                updateSideButton()
             }
 
-            val move =
-                inferMove(
-                    changed
-                ) ?: return
+            lastPlacement =
+                result.boardFen
 
-            if (
-                position.applyMove(
-                    move
-                )
-            ) {
-
-                lastMoveTime =
-                    now
-
-                status(
-                    "LIVE • ruch $move"
-                )
-
-                analysePosition()
-            }
+            analysePosition(
+                result.boardFen
+            )
 
         } finally {
 
@@ -555,92 +514,9 @@ class OverlayService : Service() {
         }
     }
 
-    private fun inferMove(
-        changed:
-            List<BoardTracker.ChangedSquare>
-    ): String? {
-
-        val sources =
-            changed.filter {
-
-                position.isOwnPiece(
-                    it.square
-                )
-            }
-
-        if (sources.isEmpty()) {
-            return null
-        }
-
-        data class Candidate(
-            val move: String,
-            val score: Double
-        )
-
-        val candidates =
-            mutableListOf<Candidate>()
-
-        for (source in sources) {
-
-            for (destination in changed) {
-
-                if (
-                    source.square ==
-                    destination.square
-                ) {
-                    continue
-                }
-
-                if (
-                    !position.isPseudoLegal(
-                        source.square,
-                        destination.square
-                    )
-                ) {
-                    continue
-                }
-
-                var move =
-                    source.square +
-                        destination.square
-
-                val piece =
-                    position.pieceAt(
-                        source.square
-                    )
-
-                if (
-                    piece.uppercaseChar() == 'P' &&
-                    (
-                        destination.square[1] == '1' ||
-                        destination.square[1] == '8'
-                    )
-                ) {
-
-                    move += "q"
-                }
-
-                candidates +=
-                    Candidate(
-                        move,
-                        source.difference +
-                            destination.difference
-                    )
-            }
-        }
-
-        return candidates
-            .maxByOrNull {
-                it.score
-            }
-            ?.move
-    }
-
-    private fun analysePosition() {
-
-        if (!boardWasLocked) {
-            return
-        }
+    private fun analysePosition(
+        placement: String
+    ) {
 
         if (
             analysing.getAndSet(true)
@@ -648,25 +524,43 @@ class OverlayService : Service() {
             return
         }
 
+        /*
+         * Z samego obrazu nie możemy niezawodnie
+         * ustalić praw do roszady ani en passant.
+         *
+         * Dlatego używamy:
+         *
+         * - - 0 1
+         *
+         * Dla ogromnej większości pozycji
+         * analiza będzie poprawna.
+         */
         val fen =
-            position.toFen()
+            buildString {
+
+                append(placement)
+
+                if (whiteToMove) {
+                    append(" w ")
+                } else {
+                    append(" b ")
+                }
+
+                append("- - 0 1")
+            }
+
+        status(
+            "LIVE • analizuję..."
+        )
 
         engine.analyzeFen(
             fen,
-            13
+            14
         ) { result ->
 
             analysing.set(false)
 
-            if (!boardWasLocked) {
-                return@analyzeFen
-            }
-
             mainHandler.post {
-
-                if (!boardWasLocked) {
-                    return@post
-                }
 
                 if (
                     result.error != null
@@ -680,6 +574,14 @@ class OverlayService : Service() {
 
                 analysisText?.text =
                     buildString {
+
+                        append(
+                            if (whiteToMove) {
+                                "Ruch: BIAŁE\n"
+                            } else {
+                                "Ruch: CZARNE\n"
+                            }
+                        )
 
                         append(
                             "Ocena: ${result.evaluation}\n"
@@ -705,11 +607,14 @@ class OverlayService : Service() {
                     result.evaluation
                         .toDoubleOrNull()
 
+                /*
+                 * Pasek pokazujemy zawsze
+                 * z perspektywy białych.
+                 */
                 if (
                     evaluation != null &&
-                    !position.whiteToMove
+                    !whiteToMove
                 ) {
-
                     evaluation =
                         -evaluation
                 }
@@ -718,350 +623,6 @@ class OverlayService : Service() {
                     evaluation,
                     result.moves
                 )
-            }
-        }
-    }
-
-    private fun showBoardOverlayOnMain(
-        area:
-            BoardTracker.BoardArea
-    ) {
-
-        mainHandler.post {
-
-            if (!boardWasLocked) {
-                return@post
-            }
-
-            try {
-
-                val existing =
-                    boardOverlay
-
-                if (existing == null) {
-
-                    val view =
-                        BoardOverlayView(
-                            this
-                        )
-
-                    view.whiteAtBottom =
-                        tracker.whiteAtBottom
-
-                    val params =
-                        WindowManager.LayoutParams(
-                            area.size,
-                            area.size,
-
-                            WindowManager
-                                .LayoutParams
-                                .TYPE_APPLICATION_OVERLAY,
-
-                            WindowManager
-                                .LayoutParams
-                                .FLAG_NOT_FOCUSABLE or
-                                WindowManager
-                                    .LayoutParams
-                                    .FLAG_NOT_TOUCHABLE,
-
-                            PixelFormat.TRANSLUCENT
-                        )
-
-                    params.gravity =
-                        Gravity.TOP or
-                            Gravity.START
-
-                    params.x =
-                        area.left
-
-                    params.y =
-                        area.top
-
-                    boardOverlay =
-                        view
-
-                    windowManager.addView(
-                        view,
-                        params
-                    )
-
-                } else {
-
-                    val params =
-                        existing.layoutParams
-                            as? WindowManager.LayoutParams
-                            ?: return@post
-
-                    params.x =
-                        area.left
-
-                    params.y =
-                        area.top
-
-                    params.width =
-                        area.size
-
-                    params.height =
-                        area.size
-
-                    windowManager
-                        .updateViewLayout(
-                            existing,
-                            params
-                        )
-                }
-
-            } catch (error: Throwable) {
 
                 status(
-                    "LIVE • OVERLAY ERROR: " +
-                        (
-                            error.message
-                                ?: error.javaClass.simpleName
-                        )
-                )
-            }
-        }
-    }
-
-    private fun createInfoOverlay() {
-
-        val root =
-            LinearLayout(this)
-                .apply {
-
-                    orientation =
-                        LinearLayout.VERTICAL
-
-                    setPadding(
-                        14,
-                        8,
-                        14,
-                        8
-                    )
-
-                    setBackgroundColor(
-                        0xB8181818.toInt()
-                    )
-                }
-
-        statusText =
-            TextView(this)
-                .apply {
-
-                    text =
-                        "LIVE • oczekiwanie"
-
-                    textSize =
-                        14f
-
-                    setTextColor(
-                        0xFFFFFFFF.toInt()
-                    )
-                }
-
-        analysisText =
-            TextView(this)
-                .apply {
-
-                    text =
-                        "Czekam na planszę..."
-
-                    textSize =
-                        13f
-
-                    setTextColor(
-                        0xFFFFFFFF.toInt()
-                    )
-                }
-
-        root.addView(
-            statusText
-        )
-
-        root.addView(
-            analysisText
-        )
-
-        val params =
-            WindowManager.LayoutParams(
-                360,
-                WindowManager
-                    .LayoutParams
-                    .WRAP_CONTENT,
-
-                WindowManager
-                    .LayoutParams
-                    .TYPE_APPLICATION_OVERLAY,
-
-                WindowManager
-                    .LayoutParams
-                    .FLAG_NOT_FOCUSABLE or
-                    WindowManager
-                        .LayoutParams
-                        .FLAG_NOT_TOUCHABLE,
-
-                PixelFormat.TRANSLUCENT
-            )
-
-        params.gravity =
-            Gravity.TOP or
-                Gravity.START
-
-        params.x =
-            22
-
-        params.y =
-            80
-
-        infoOverlay =
-            root
-
-        windowManager.addView(
-            root,
-            params
-        )
-    }
-
-    private fun status(
-        text: String
-    ) {
-
-        mainHandler.post {
-
-            statusText?.text =
-                text
-        }
-    }
-
-    private fun createChannel() {
-
-        if (
-            Build.VERSION.SDK_INT <
-            Build.VERSION_CODES.O
-        ) {
-            return
-        }
-
-        val channel =
-            NotificationChannel(
-                "stockfish_live",
-                "Stockfish LIVE",
-                NotificationManager
-                    .IMPORTANCE_LOW
-            )
-
-        getSystemService(
-            NotificationManager::class.java
-        )
-            .createNotificationChannel(
-                channel
-            )
-    }
-
-    private fun releaseCapture(
-        stopProjection: Boolean
-    ) {
-
-        runCatching {
-
-            imageReader
-                ?.setOnImageAvailableListener(
-                    null,
-                    null
-                )
-        }
-
-        runCatching {
-            imageReader?.close()
-        }
-
-        imageReader =
-            null
-
-        runCatching {
-            virtualDisplay?.release()
-        }
-
-        virtualDisplay =
-            null
-
-        val old =
-            projection
-
-        projection =
-            null
-
-        if (old != null) {
-
-            runCatching {
-
-                old.unregisterCallback(
-                    projectionCallback
-                )
-            }
-
-            if (stopProjection) {
-
-                runCatching {
-                    old.stop()
-                }
-            }
-        }
-    }
-
-    override fun onDestroy() {
-
-        boardWasLocked =
-            false
-
-        releaseCapture(true)
-
-        runCatching {
-            engine.shutdown()
-        }
-
-        mainHandler.post {
-
-            infoOverlay?.let {
-
-                runCatching {
-                    windowManager
-                        .removeView(it)
-                }
-            }
-
-            boardOverlay?.let {
-
-                runCatching {
-                    windowManager
-                        .removeView(it)
-                }
-            }
-
-            infoOverlay =
-                null
-
-            boardOverlay =
-                null
-        }
-
-        captureThread
-            ?.quitSafely()
-
-        captureThread =
-            null
-
-        captureHandler =
-            null
-
-        super.onDestroy()
-    }
-
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? {
-
-        return null
-    }
-}
+                    "LIVE • analiza gotowa
