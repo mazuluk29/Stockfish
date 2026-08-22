@@ -19,7 +19,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
-        android:text="Overlay wyłączony" />
+        android:text="LIVE wyłączony" />
 
     <Button
         android:id="@+id/grantOverlay"
@@ -29,21 +29,15 @@
         android:text="Zezwól na nakładkę" />
 
     <Button
-        android:id="@+id/startOverlay"
+        android:id="@+id/startLive"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Uruchom overlay" />
+        android:text="Uruchom analizę LIVE" />
 
     <Button
         android:id="@+id/stopOverlay"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Zatrzymaj overlay" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="18dp"
-        android:text="W tej wersji pozycję podajesz przez FEN. Automatyczne rozpoznawanie planszy ze zrzutu ekranu dołożymy w kolejnym kroku." />
+        android:text="Zatrzymaj analizę" />
 
 </LinearLayout>
